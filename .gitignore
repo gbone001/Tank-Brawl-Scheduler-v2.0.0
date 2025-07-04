@@ -1,0 +1,40 @@
+# Environment variables (NEVER COMMIT THESE!)
+.env
+*.env
+.env.local
+
+# Database files
+*.db
+*.sqlite
+data/*.db
+data/logs/*.log
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+bot_env/
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+data/logs/
+
+# Backup files
+*.bak
+*.backup
