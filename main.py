@@ -1,21 +1,21 @@
-# main.py - Tank Brawl Match Scheduler Bot
+# main.py - Tank Brawl Scheduler Bot (Railway-compatible)
 import discord
 from discord.ext import commands
 import asyncio
 import logging
 import os
-from dotenv import load_dotenv
+import sys
 
-# Load environment variables
-load_dotenv()
+# Create logs directory if it doesn't exist
+os.makedirs('data/logs', exist_ok=True)
 
-# Configure logging
+# Configure logging for Railway
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('data/logs/bot.log'),
-        logging.StreamHandler()
+        logging.StreamHandler(sys.stdout),  # Console logging for Railway
+        logging.FileHandler('data/logs/bot.log', encoding='utf-8')  # File logging
     ]
 )
 
@@ -32,7 +32,7 @@ class TankBrawlBot(commands.Bot):
         super().__init__(
             command_prefix='!',
             intents=intents,
-            description="Tank Brawl Match Scheduler - Hell Let Loose Event Management Bot",
+            description="Tank Brawl Scheduler - Hell Let Loose Event Management Bot",
             help_command=None
         )
         
@@ -78,23 +78,14 @@ class TankBrawlBot(commands.Bot):
             return  # Ignore unknown commands
         
         logger.error(f"Command error in {ctx.command}: {error}")
-        
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send("❌ You don't have permission to use this command.")
-        elif isinstance(error, commands.BotMissingPermissions):
-            await ctx.send("❌ I don't have the required permissions to execute this command.")
-        elif isinstance(error, commands.CommandOnCooldown):
-            await ctx.send(f"⏰ Command is on cooldown. Try again in {error.retry_after:.2f} seconds.")
-        else:
-            await ctx.send("❌ An error occurred while processing the command.")
 
 async def main():
     bot = TankBrawlBot()
     
-    # Get token from environment variable
+    # Get token from Railway environment variable
     token = os.getenv('DISCORD_BOT_TOKEN')
     if not token:
-        logger.error("No bot token found! Set DISCORD_BOT_TOKEN in .env file.")
+        logger.error("No bot token found! Set DISCORD_BOT_TOKEN environment variable in Railway.")
         return
     
     try:
