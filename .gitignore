@@ -1,40 +1,54 @@
-# Environment variables (NEVER COMMIT THESE!)
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
 .env
-*.env
-.env.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+bot_env/
 
 # Database files
 *.db
 *.sqlite
-data/*.db
-data/logs/*.log
+*.sqlite3
 
-# Python cache files
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-build/
-dist/
-*.egg-info/
+# Log files
+*.log
+data/logs/
+logs/
 
-# Virtual environments
-bot_env/
-venv/
-env/
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+ehthumbs.db
+Thumbs.db
+desktop.ini
 
 # IDE files
 .vscode/
 .idea/
 *.swp
+*.swo
 *~
-.DS_Store
 
-# Logs
-*.log
-logs/
-data/logs/
+# Temporary files
+tmp/
+temp/
+*.tmp
 
-# Backup files
-*.bak
-*.backup
+# Bot token and secrets
+token.txt
+secrets.json
+bot_token.txt
+config.json
+
+# npm
+node_modules/
+package-lock.json
