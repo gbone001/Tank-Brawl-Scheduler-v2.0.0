@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-504th HellFire Discord Bot Setup Script
+Tank Brawl Scheduler Setup Script
 This script helps you set up the bot with minimal configuration.
 """
 
@@ -12,7 +12,7 @@ from pathlib import Path
 
 def print_header():
     print("=" * 60)
-    print("  504th HellFire Discord Bot Setup")
+    print("  Tank Brawl Scheduler Setup")
     print("=" * 60)
     print()
 
@@ -117,7 +117,7 @@ def create_run_script():
     # Unix shell script
     with open("start_bot.sh", "w") as f:
         f.write("""#!/bin/bash
-echo "🎮 Starting 504th HellFire Discord Bot..."
+echo "🎮 Starting Tank Brawl Scheduler..."
 echo
 
 # Check if virtual environment exists
@@ -160,7 +160,7 @@ def print_completion_message():
     print("   Or manually: source bot_env/bin/activate && python main.py")
     print()
     print("📖 For detailed instructions, see README.md")
-    print("🐛 For help, visit: https://github.com/yourusername/504th-hellfire-bot")
+    print("🐛 For help, visit: https://github.com/yourusername/tank-brawl-scheduler")
     print()
 
 def main():

@@ -14,7 +14,7 @@ EVENT_TYPES = {
     "saturday_brawl": {
         "name": "Saturday Brawl",
         "emoji": "🮦",
-        "default_title": "504th HellFire SATURDAY Armor Brawl",
+        "default_title": "Saturday Tank Brawl",
         "default_description": "**Victory Condition:** Team with the most time on the middle cap wins.\n**Format:** 6v6 Crew Battles",
         "role_prefix": "SAT",
         "color": 0xFF0000  # Red
@@ -59,7 +59,7 @@ BACKUP_INTERVAL_HOURS = 24  # Hours between database backups
 
 # Bot configuration
 BOT_PREFIX = "!"
-BOT_DESCRIPTION = "504th HellFire Multi-Purpose Discord Bot"
+BOT_DESCRIPTION = "Tank Brawl Scheduler Bot"
 BOT_VERSION = "2.0.0"
 
 # Logging configuration

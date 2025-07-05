@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 504th HellFire Discord Bot - Quick Start Script
+# Tank Brawl Scheduler - Quick Start Script
 set -e
 
 # Colors for output
@@ -16,7 +16,7 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 echo "================================================================"
-echo "  🎮 504th HellFire Discord Bot - Quick Start"
+echo "  🎮 Tank Brawl Scheduler - Quick Start"
 echo "================================================================"
 echo
 

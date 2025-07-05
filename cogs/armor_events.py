@@ -97,7 +97,7 @@ class ArmorEvents(commands.Cog):
     def get_event_preset(self, event_type: str):
         presets = {
             "saturday_brawl": {
-                "title": "🮦 504th HellFire SATURDAY Armor Brawl",
+                "title": "🮦 Saturday Tank Brawl",
                 "description": "**Victory Condition:** Team with the most time on the middle cap wins.\n**Format:** 6v6 Crew Battles"
             },
             "sunday_ops": {

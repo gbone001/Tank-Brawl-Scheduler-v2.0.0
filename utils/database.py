@@ -8,7 +8,7 @@ from typing import Optional, Dict, List, Any, Tuple
 logger = logging.getLogger(__name__)
 
 class EventDatabase:
-    def __init__(self, db_path='hellfire_bot.db'):
+    def __init__(self, db_path='tank_brawl.db'):
         self.db_path = db_path
         self.init_database()
 
