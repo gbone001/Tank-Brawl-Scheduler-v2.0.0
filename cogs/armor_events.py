@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ui import View, Button, UserSelect, Select, Modal, TextInput
 import logging
 import datetime
+import pytz
 from typing import Optional, Dict, List
 
 from utils.database import EventDatabase
@@ -48,7 +49,10 @@ class ArmorEvents(commands.Cog):
                 date_obj = datetime.datetime.strptime(date, "%Y-%m-%d").date()
                 time_obj = datetime.datetime.strptime(time, "%H:%M").time()
                 event_datetime = datetime.datetime.combine(date_obj, time_obj)
-                if event_datetime < datetime.datetime.now():
+                # Convert to EST timezone
+                est = pytz.timezone("US/Eastern")
+                event_datetime = est.localize(event_datetime)
+                if event_datetime < datetime.datetime.now(est):
                     await interaction.response.send_message("❌ Cannot schedule in the past!", ephemeral=True)
                     return
             except ValueError:
