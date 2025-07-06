@@ -143,7 +143,8 @@ class ArmorEvents(commands.Cog):
             
             # Calculate vote duration
             if event_datetime:
-                now = datetime.datetime.now()
+                est = pytz.timezone("US/Eastern")
+                now = datetime.datetime.now(est)
                 
                 # Calculate when the vote should END (1 hour before event)
                 vote_end_time = event_datetime - datetime.timedelta(hours=1)
