@@ -131,53 +131,108 @@ class ArmorEvents(commands.Cog):
         }
         return presets.get(event_type, presets["custom"])
 
-    async def assign_event_role(self, user: discord.Member, event_type: str):
-        """Assign event-specific role to user"""
+    async def assign_event_role(self, user: discord.Member, event_type: str, team: str = None):
+        """Assign team-specific roles based on event type and team"""
         try:
-            # Get or create event role
-            role_name = f"{event_type.replace('_', ' ').title()} Participant"
+            guild = user.guild
             
-            # Try to find existing role
-            event_role = discord.utils.get(user.guild.roles, name=role_name)
+            # Create event name for roles (make it clean)
+            event_names = {
+                "saturday_brawl": "Saturday Brawl",
+                "sunday_ops": "Sunday Ops", 
+                "training": "Training",
+                "tournament": "Tournament",
+                "custom": "Custom Event"
+            }
             
-            # Create role if it doesn't exist
-            if not event_role:
-                event_role = await user.guild.create_role(
-                    name=role_name,
-                    color=discord.Color.blue(),
-                    mentionable=True,
-                    reason=f"Auto-created for {event_type} events"
-                )
-                logger.info(f"Created new event role: {role_name}")
+            event_name = event_names.get(event_type, "Custom Event")
             
-            # Assign role to user
-            if event_role not in user.roles:
-                await user.add_roles(event_role, reason=f"Joined {event_type} event")
-                logger.info(f"Assigned {role_name} to {user.display_name}")
+            logger.info(f"🎭 Assigning role for {user.display_name} - Event: {event_name}, Team: {team}")
+            
+            # Determine team name and role color
+            if team == "A":
+                team_name = "Allies"
+                role_color = discord.Color.green()
+            elif team == "B":
+                team_name = "Axis"  
+                role_color = discord.Color.red()
+            else:
+                # No team specified, just assign general participant role
+                role_name = f"{event_name} Participant"
+                role_color = discord.Color.blue()
+                team_name = None
+            
+            # Create the role name
+            if team_name:
+                role_name = f"{event_name} {team_name}"
+            else:
+                role_name = f"{event_name} Participant"
+            
+            # Find or create the role
+            target_role = discord.utils.get(guild.roles, name=role_name)
+            
+            if not target_role:
+                try:
+                    target_role = await guild.create_role(
+                        name=role_name,
+                        color=role_color,
+                        mentionable=True,
+                        reason=f"Auto-created for {event_name} events"
+                    )
+                    logger.info(f"✅ Created new role: {role_name}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to create role {role_name}: {e}")
+                    return False
+            
+            # Assign the role to the user
+            if target_role not in user.roles:
+                await user.add_roles(target_role, reason=f"Joined {event_name} as {team_name or 'participant'}")
+                logger.info(f"✅ Assigned {role_name} to {user.display_name}")
                 return True
-                
+            else:
+                logger.info(f"ℹ️ {user.display_name} already has {role_name}")
+                return True
+                    
         except Exception as e:
-            logger.error(f"Error assigning event role: {e}")
+            logger.error(f"❌ Error assigning role: {e}")
             return False
-        
-        return False
 
     async def remove_event_role(self, user: discord.Member, event_type: str):
-        """Remove event-specific role from user"""
+        """Remove all event-specific roles when user leaves"""
         try:
-            role_name = f"{event_type.replace('_', ' ').title()} Participant"
-            event_role = discord.utils.get(user.guild.roles, name=role_name)
+            guild = user.guild
             
-            if event_role and event_role in user.roles:
-                await user.remove_roles(event_role, reason=f"Left {event_type} event")
-                logger.info(f"Removed {role_name} from {user.display_name}")
+            # Event name mapping
+            event_names = {
+                "saturday_brawl": "Saturday Brawl",
+                "sunday_ops": "Sunday Ops",
+                "training": "Training", 
+                "tournament": "Tournament",
+                "custom": "Custom Event"
+            }
+            
+            event_name = event_names.get(event_type, "Custom Event")
+            
+            # Remove all possible roles for this event
+            roles_to_remove = []
+            
+            # Check for team-specific roles
+            allies_role = discord.utils.get(guild.roles, name=f"{event_name} Allies")
+            axis_role = discord.utils.get(guild.roles, name=f"{event_name} Axis")
+            participant_role = discord.utils.get(guild.roles, name=f"{event_name} Participant")
+            
+            for role in [allies_role, axis_role, participant_role]:
+                if role and role in user.roles:
+                    roles_to_remove.append(role)
+            
+            if roles_to_remove:
+                await user.remove_roles(*roles_to_remove, reason=f"Left {event_name} event")
+                logger.info(f"🗑️ Removed {len(roles_to_remove)} event roles from {user.display_name}")
                 return True
-                
+            
         except Exception as e:
-            logger.error(f"Error removing event role: {e}")
+            logger.error(f"❌ Error removing roles: {e}")
             return False
-        
-        return False
 
     async def create_map_vote(self, channel, event_datetime, event_id):
         """Create map vote that ends 1 hour before event starts"""
@@ -246,6 +301,31 @@ class ArmorEvents(commands.Cog):
         except Exception as e:
             logger.error(f"❌ DEBUG: Error creating map vote: {e}")
             return False
+
+    @app_commands.command(name="list_roles")
+    async def list_roles(self, interaction: discord.Interaction):
+        """List all event roles in the server"""
+        if not any(role.name in ADMIN_ROLES for role in interaction.user.roles):
+            await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+            return
+        
+        # Find all roles that look like event roles
+        event_roles = []
+        for role in interaction.guild.roles:
+            if any(keyword in role.name for keyword in ["Participant", "Allies", "Axis", "Saturday", "Sunday"]):
+                event_roles.append(f"• **{role.name}** - {len(role.members)} members")
+        
+        if not event_roles:
+            await interaction.response.send_message("No event roles found.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="🎭 Event Roles",
+            description="\n".join(event_roles[:20]),  # Limit to 20 roles
+            color=0x0099ff
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class EventSignupView(View):
     def __init__(self, title, description, event_time=None, event_type="custom", event_id=None):
@@ -353,19 +433,20 @@ class CommanderSelect(Select):
             await interaction.response.send_message("❌ Already registered!", ephemeral=True)
             return
         
-        team = self.values[0]
+        team = self.values[0]  # "A" or "B"
         if team == "A":
             self.view_ref.commander_a = interaction.user
         else:
             self.view_ref.commander_b = interaction.user
         
-        # Assign event role
+        # Assign team role
         armor_events_cog = interaction.client.get_cog('ArmorEvents')
         if armor_events_cog:
-            await armor_events_cog.assign_event_role(interaction.user, self.view_ref.event_type)
+            await armor_events_cog.assign_event_role(interaction.user, self.view_ref.event_type, team)
         
         await self.view_ref.update_embed(interaction)
-        await interaction.response.send_message(f"✅ You are now {team} Commander! Event role assigned.", ephemeral=True)
+        team_name = "Allies" if team == "A" else "Axis"
+        await interaction.response.send_message(f"✅ You are now {team_name} Commander! Team role assigned.", ephemeral=True)
 
 class JoinCrewAButton(Button):
     def __init__(self, view):
@@ -376,6 +457,12 @@ class JoinCrewAButton(Button):
         if self.view_ref.is_user_registered(interaction.user):
             await interaction.response.send_message("❌ Already registered!", ephemeral=True)
             return
+        
+        # Pre-assign Allies role before crew selection
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(interaction.user, self.view_ref.event_type, "A")
+        
         await interaction.response.send_message(view=CrewSelectView(self.view_ref, "A", interaction.user), ephemeral=True)
 
 class JoinCrewBButton(Button):
@@ -387,6 +474,12 @@ class JoinCrewBButton(Button):
         if self.view_ref.is_user_registered(interaction.user):
             await interaction.response.send_message("❌ Already registered!", ephemeral=True)
             return
+        
+        # Pre-assign Axis role before crew selection  
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(interaction.user, self.view_ref.event_type, "B")
+        
         await interaction.response.send_message(view=CrewSelectView(self.view_ref, "B", interaction.user), ephemeral=True)
 
 class RecruitMeButton(Button):
@@ -401,7 +494,7 @@ class RecruitMeButton(Button):
         
         self.view_ref.recruits.append(interaction.user)
         
-        # Assign event role
+        # Assign general participant role (no team)
         armor_events_cog = interaction.client.get_cog('ArmorEvents')
         if armor_events_cog:
             await armor_events_cog.assign_event_role(interaction.user, self.view_ref.event_type)
@@ -476,13 +569,13 @@ class LeaveEventButton(Button):
             removed = True
 
         if removed:
-            # Remove event role
+            # Remove all event roles when leaving
             armor_events_cog = interaction.client.get_cog('ArmorEvents')
             if armor_events_cog:
                 await armor_events_cog.remove_event_role(interaction.user, view.event_type)
             
             await view.update_embed(interaction)
-            await interaction.response.send_message("❌ Removed from event! Event role removed.", ephemeral=True)
+            await interaction.response.send_message("❌ Removed from event! All event roles removed.", ephemeral=True)
         else:
             await interaction.response.send_message("⚠️ Not registered!", ephemeral=True)
 
@@ -561,12 +654,18 @@ class AssignGunnerButton(Button):
         # Assign recruit as gunner
         crew['gunner'] = recruit
         
+        # Assign team role to the recruit
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(recruit, self.parent.main_view.event_type, self.parent.team)
+        
         # Remove from recruit pool
         self.parent.main_view.recruits.remove(recruit)
         
         await self.parent.main_view.update_embed(interaction)
+        team_name = "Allies" if self.parent.team == "A" else "Axis"
         await interaction.response.send_message(
-            f"✅ **{recruit.display_name}** recruited as gunner for **{crew['crew_name']}**!",
+            f"✅ **{recruit.display_name}** recruited as gunner for **{crew['crew_name']}**! {team_name} role assigned.",
             ephemeral=True
         )
 
@@ -582,12 +681,18 @@ class AssignDriverButton(Button):
         # Assign recruit as driver
         crew['driver'] = recruit
         
+        # Assign team role to the recruit
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(recruit, self.parent.main_view.event_type, self.parent.team)
+        
         # Remove from recruit pool
         self.parent.main_view.recruits.remove(recruit)
         
         await self.parent.main_view.update_embed(interaction)
+        team_name = "Allies" if self.parent.team == "A" else "Axis"
         await interaction.response.send_message(
-            f"✅ **{recruit.display_name}** recruited as driver for **{crew['crew_name']}**!",
+            f"✅ **{recruit.display_name}** recruited as driver for **{crew['crew_name']}**! {team_name} role assigned.",
             ephemeral=True
         )
 
@@ -646,13 +751,14 @@ class UpdateGunnerSelect(UserSelect):
                 await interaction.response.send_message("❌ User already registered!", ephemeral=True)
                 return
             
-            # Assign event role to new gunner
+            # Assign team role to new gunner
             armor_events_cog = interaction.client.get_cog('ArmorEvents')
             if armor_events_cog:
-                await armor_events_cog.assign_event_role(new_gunner, self.parent.main_view.event_type)
+                await armor_events_cog.assign_event_role(new_gunner, self.parent.main_view.event_type, self.parent.team)
             
             self.parent.crew['gunner'] = new_gunner
-            await interaction.response.send_message(f"✅ Gunner updated to {new_gunner.mention}! Event role assigned.", ephemeral=True)
+            team_name = "Allies" if self.parent.team == "A" else "Axis" 
+            await interaction.response.send_message(f"✅ Gunner updated to {new_gunner.mention}! {team_name} role assigned.", ephemeral=True)
         else:
             self.parent.crew['gunner'] = self.parent.crew['commander']
             await interaction.response.send_message("✅ Gunner cleared - commander will gun!", ephemeral=True)
@@ -677,13 +783,14 @@ class UpdateDriverSelect(UserSelect):
                 await interaction.response.send_message("❌ User already registered!", ephemeral=True)
                 return
             
-            # Assign event role to new driver
+            # Assign team role to new driver
             armor_events_cog = interaction.client.get_cog('ArmorEvents')
             if armor_events_cog:
-                await armor_events_cog.assign_event_role(new_driver, self.parent.main_view.event_type)
+                await armor_events_cog.assign_event_role(new_driver, self.parent.main_view.event_type, self.parent.team)
                 
             self.parent.crew['driver'] = new_driver
-            await interaction.response.send_message(f"✅ Driver updated to {new_driver.mention}! Event role assigned.", ephemeral=True)
+            team_name = "Allies" if self.parent.team == "A" else "Axis"
+            await interaction.response.send_message(f"✅ Driver updated to {new_driver.mention}! {team_name} role assigned.", ephemeral=True)
         else:
             self.parent.crew['driver'] = self.parent.crew['commander']
             await interaction.response.send_message("✅ Driver cleared - commander will drive!", ephemeral=True)
@@ -735,10 +842,10 @@ class GunnerSelect(UserSelect):
         
         self.parent.gunner = self.values[0]
         
-        # Assign event role to gunner
+        # Assign team role to gunner
         armor_events_cog = interaction.client.get_cog('ArmorEvents')
         if armor_events_cog:
-            await armor_events_cog.assign_event_role(self.parent.gunner, self.parent.main_view.event_type)
+            await armor_events_cog.assign_event_role(self.parent.gunner, self.parent.main_view.event_type, self.parent.team)
         
         await interaction.response.send_message(view=DriverSelectView(self.parent), ephemeral=True)
 
@@ -760,10 +867,10 @@ class DriverSelect(UserSelect):
         
         driver = self.values[0]
         
-        # Assign event role to driver
+        # Assign team role to driver
         armor_events_cog = interaction.client.get_cog('ArmorEvents')
         if armor_events_cog:
-            await armor_events_cog.assign_event_role(driver, self.parent.main_view.event_type)
+            await armor_events_cog.assign_event_role(driver, self.parent.main_view.event_type, self.parent.team)
         
         await interaction.response.send_modal(CrewNameModal(self.parent, driver))
 
@@ -785,10 +892,8 @@ class CrewNameModal(Modal):
         main_view = self.parent.main_view
         slot_list = main_view.crews_a if self.parent.team == "A" else main_view.crews_b
 
-        # Assign event role to commander
+        # Get the armor events cog for role assignment
         armor_events_cog = interaction.client.get_cog('ArmorEvents')
-        if armor_events_cog:
-            await armor_events_cog.assign_event_role(self.parent.commander, main_view.event_type)
 
         for i in range(MAX_CREWS_PER_TEAM):
             if slot_list[i] is None:
@@ -798,30 +903,24 @@ class CrewNameModal(Modal):
                     "gunner": self.parent.gunner,
                     "driver": self.driver
                 }
+                
+                # Assign team roles to all crew members
+                if armor_events_cog:
+                    # Assign role to commander
+                    await armor_events_cog.assign_event_role(self.parent.commander, main_view.event_type, self.parent.team)
+                    
+                    # Assign role to gunner  
+                    await armor_events_cog.assign_event_role(self.parent.gunner, main_view.event_type, self.parent.team)
+                    
+                    # Assign role to driver
+                    await armor_events_cog.assign_event_role(self.driver, main_view.event_type, self.parent.team)
+                
                 await main_view.update_embed(interaction)
-                await interaction.response.send_message(f"✅ Crew '{crew_name}' registered! Event roles assigned to all members.", ephemeral=True)
+                team_name = "Allies" if self.parent.team == "A" else "Axis"
+                await interaction.response.send_message(f"✅ Crew '{crew_name}' registered for {team_name}! Team roles assigned to all members.", ephemeral=True)
                 return
 
         await interaction.response.send_message("❌ Team is full!", ephemeral=True)
-
-    @app_commands.command(name="list_roles")
-    async def list_roles(self, interaction: discord.Interaction):
-        """List all event roles in the server"""
-        if not any(role.name in ADMIN_ROLES for role in interaction.user.roles):
-            await interaction.response.send_message("❌ Admin only!", ephemeral=True)
-            return
-        
-        event_roles = []
-        for role in interaction.guild.roles:
-            if any(keyword in role.name for keyword in ["Participant", "Allies", "Axis", "Saturday", "Sunday"]):
-                event_roles.append(f"• **{role.name}** - {len(role.members)} members")
-        
-        if not event_roles:
-            await interaction.response.send_message("No event roles found.", ephemeral=True)
-            return
-        
-        embed = discord.Embed(title="🎭 Event Roles", description="\n".join(event_roles[:20]), color=0x0099ff)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(ArmorEvents(bot))
