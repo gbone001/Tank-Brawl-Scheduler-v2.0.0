@@ -804,5 +804,24 @@ class CrewNameModal(Modal):
 
         await interaction.response.send_message("❌ Team is full!", ephemeral=True)
 
+    @app_commands.command(name="list_roles")
+    async def list_roles(self, interaction: discord.Interaction):
+        """List all event roles in the server"""
+        if not any(role.name in ADMIN_ROLES for role in interaction.user.roles):
+            await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+            return
+        
+        event_roles = []
+        for role in interaction.guild.roles:
+            if any(keyword in role.name for keyword in ["Participant", "Allies", "Axis", "Saturday", "Sunday"]):
+                event_roles.append(f"• **{role.name}** - {len(role.members)} members")
+        
+        if not event_roles:
+            await interaction.response.send_message("No event roles found.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(title="🎭 Event Roles", description="\n".join(event_roles[:20]), color=0x0099ff)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 async def setup(bot):
     await bot.add_cog(ArmorEvents(bot))
