@@ -1,4 +1,4 @@
-# cogs/armor_events.py - Complete working version with recruit system
+# cogs/armor_events.py - Complete working version with automatic role assignment
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -23,7 +23,7 @@ class ArmorEvents(commands.Cog):
     @app_commands.describe(
         event_type="Type of armor event",
         date="Date in YYYY-MM-DD format (e.g., 2025-06-15)",
-        time="Time in HH:MM format, 24-hour (e.g., 20:00)",
+        time="Time in HH:MM format, 24-hour (e.g., 20:00) - EST timezone",
         map_vote_channel="Channel for map vote (optional - defaults to current channel)"
     )
     @app_commands.choices(event_type=[
@@ -40,7 +40,7 @@ class ArmorEvents(commands.Cog):
             await interaction.response.send_message("❌ You need admin permissions.", ephemeral=True)
             return
         
-        # Parse datetime
+        # Parse datetime with EST timezone
         event_datetime = None
         if date:
             if not time:
@@ -49,9 +49,12 @@ class ArmorEvents(commands.Cog):
                 date_obj = datetime.datetime.strptime(date, "%Y-%m-%d").date()
                 time_obj = datetime.datetime.strptime(time, "%H:%M").time()
                 event_datetime = datetime.datetime.combine(date_obj, time_obj)
+                
                 # Convert to EST timezone
                 est = pytz.timezone("US/Eastern")
                 event_datetime = est.localize(event_datetime)
+                
+                # Check if in the past (compare with EST now)
                 if event_datetime < datetime.datetime.now(est):
                     await interaction.response.send_message("❌ Cannot schedule in the past!", ephemeral=True)
                     return
@@ -128,6 +131,54 @@ class ArmorEvents(commands.Cog):
         }
         return presets.get(event_type, presets["custom"])
 
+    async def assign_event_role(self, user: discord.Member, event_type: str):
+        """Assign event-specific role to user"""
+        try:
+            # Get or create event role
+            role_name = f"{event_type.replace('_', ' ').title()} Participant"
+            
+            # Try to find existing role
+            event_role = discord.utils.get(user.guild.roles, name=role_name)
+            
+            # Create role if it doesn't exist
+            if not event_role:
+                event_role = await user.guild.create_role(
+                    name=role_name,
+                    color=discord.Color.blue(),
+                    mentionable=True,
+                    reason=f"Auto-created for {event_type} events"
+                )
+                logger.info(f"Created new event role: {role_name}")
+            
+            # Assign role to user
+            if event_role not in user.roles:
+                await user.add_roles(event_role, reason=f"Joined {event_type} event")
+                logger.info(f"Assigned {role_name} to {user.display_name}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error assigning event role: {e}")
+            return False
+        
+        return False
+
+    async def remove_event_role(self, user: discord.Member, event_type: str):
+        """Remove event-specific role from user"""
+        try:
+            role_name = f"{event_type.replace('_', ' ').title()} Participant"
+            event_role = discord.utils.get(user.guild.roles, name=role_name)
+            
+            if event_role and event_role in user.roles:
+                await user.remove_roles(event_role, reason=f"Left {event_type} event")
+                logger.info(f"Removed {role_name} from {user.display_name}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error removing event role: {e}")
+            return False
+        
+        return False
+
     async def create_map_vote(self, channel, event_datetime, event_id):
         """Create map vote that ends 1 hour before event starts"""
         try:
@@ -141,7 +192,7 @@ class ArmorEvents(commands.Cog):
             
             logger.info(f"✅ DEBUG: Found MapVoting cog")
             
-            # Calculate vote duration
+            # Calculate vote duration with timezone awareness
             if event_datetime:
                 est = pytz.timezone("US/Eastern")
                 now = datetime.datetime.now(est)
@@ -174,7 +225,7 @@ class ArmorEvents(commands.Cog):
                 logger.info(f"🔍 DEBUG: No event time set, using default 7 day vote")
             
             logger.info(f"🔍 DEBUG: Final vote duration: {duration_minutes} minutes ({duration_minutes/1440:.1f} days)")
-            actual_end_time = datetime.datetime.now() + datetime.timedelta(minutes=duration_minutes)
+            actual_end_time = datetime.datetime.now(est) + datetime.timedelta(minutes=duration_minutes)
             logger.info(f"🔍 DEBUG: Vote will actually end at: {actual_end_time}")
             
             # Create the map vote
@@ -287,7 +338,7 @@ class EventSignupView(View):
             embed = self.build_embed()
             await self.message.edit(embed=embed, view=self)
 
-# UI Components
+# UI Components with Role Assignment
 class CommanderSelect(Select):
     def __init__(self, view):
         options = [
@@ -308,8 +359,13 @@ class CommanderSelect(Select):
         else:
             self.view_ref.commander_b = interaction.user
         
+        # Assign event role
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(interaction.user, self.view_ref.event_type)
+        
         await self.view_ref.update_embed(interaction)
-        await interaction.response.send_message(f"✅ You are now {team} Commander!", ephemeral=True)
+        await interaction.response.send_message(f"✅ You are now {team} Commander! Event role assigned.", ephemeral=True)
 
 class JoinCrewAButton(Button):
     def __init__(self, view):
@@ -342,9 +398,16 @@ class RecruitMeButton(Button):
         if self.view_ref.is_user_registered(interaction.user):
             await interaction.response.send_message("❌ Already registered!", ephemeral=True)
             return
+        
         self.view_ref.recruits.append(interaction.user)
+        
+        # Assign event role
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(interaction.user, self.view_ref.event_type)
+        
         await self.view_ref.update_embed(interaction)
-        await interaction.response.send_message("✅ Added to recruit pool!", ephemeral=True)
+        await interaction.response.send_message("✅ Added to recruit pool! Event role assigned.", ephemeral=True)
 
 class RecruitPlayersButton(Button):
     def __init__(self, view):
@@ -413,8 +476,13 @@ class LeaveEventButton(Button):
             removed = True
 
         if removed:
+            # Remove event role
+            armor_events_cog = interaction.client.get_cog('ArmorEvents')
+            if armor_events_cog:
+                await armor_events_cog.remove_event_role(interaction.user, view.event_type)
+            
             await view.update_embed(interaction)
-            await interaction.response.send_message("❌ Removed from event!", ephemeral=True)
+            await interaction.response.send_message("❌ Removed from event! Event role removed.", ephemeral=True)
         else:
             await interaction.response.send_message("⚠️ Not registered!", ephemeral=True)
 
@@ -577,8 +645,14 @@ class UpdateGunnerSelect(UserSelect):
             if self.parent.main_view.is_user_registered(new_gunner):
                 await interaction.response.send_message("❌ User already registered!", ephemeral=True)
                 return
+            
+            # Assign event role to new gunner
+            armor_events_cog = interaction.client.get_cog('ArmorEvents')
+            if armor_events_cog:
+                await armor_events_cog.assign_event_role(new_gunner, self.parent.main_view.event_type)
+            
             self.parent.crew['gunner'] = new_gunner
-            await interaction.response.send_message(f"✅ Gunner updated to {new_gunner.mention}!", ephemeral=True)
+            await interaction.response.send_message(f"✅ Gunner updated to {new_gunner.mention}! Event role assigned.", ephemeral=True)
         else:
             self.parent.crew['gunner'] = self.parent.crew['commander']
             await interaction.response.send_message("✅ Gunner cleared - commander will gun!", ephemeral=True)
@@ -602,8 +676,14 @@ class UpdateDriverSelect(UserSelect):
             if self.parent.main_view.is_user_registered(new_driver):
                 await interaction.response.send_message("❌ User already registered!", ephemeral=True)
                 return
+            
+            # Assign event role to new driver
+            armor_events_cog = interaction.client.get_cog('ArmorEvents')
+            if armor_events_cog:
+                await armor_events_cog.assign_event_role(new_driver, self.parent.main_view.event_type)
+                
             self.parent.crew['driver'] = new_driver
-            await interaction.response.send_message(f"✅ Driver updated to {new_driver.mention}!", ephemeral=True)
+            await interaction.response.send_message(f"✅ Driver updated to {new_driver.mention}! Event role assigned.", ephemeral=True)
         else:
             self.parent.crew['driver'] = self.parent.crew['commander']
             await interaction.response.send_message("✅ Driver cleared - commander will drive!", ephemeral=True)
@@ -633,7 +713,7 @@ class EditCrewNameModal(Modal):
         await self.parent.main_view.update_embed(interaction)
         await interaction.response.send_message(f"✅ Crew name updated to '{new_name}'!", ephemeral=True)
 
-# Crew selection system (unchanged)
+# Crew selection system with role assignment
 class CrewSelectView(View):
     def __init__(self, main_view, team, commander):
         super().__init__(timeout=300)
@@ -652,7 +732,14 @@ class GunnerSelect(UserSelect):
         if self.parent.main_view.is_user_registered(self.values[0]):
             await interaction.response.send_message("❌ User already registered!", ephemeral=True)
             return
+        
         self.parent.gunner = self.values[0]
+        
+        # Assign event role to gunner
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(self.parent.gunner, self.parent.main_view.event_type)
+        
         await interaction.response.send_message(view=DriverSelectView(self.parent), ephemeral=True)
 
 class DriverSelectView(View):
@@ -670,7 +757,14 @@ class DriverSelect(UserSelect):
         if self.parent.main_view.is_user_registered(self.values[0]):
             await interaction.response.send_message("❌ User already registered!", ephemeral=True)
             return
+        
         driver = self.values[0]
+        
+        # Assign event role to driver
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(driver, self.parent.main_view.event_type)
+        
         await interaction.response.send_modal(CrewNameModal(self.parent, driver))
 
 class CrewNameModal(Modal):
@@ -691,6 +785,11 @@ class CrewNameModal(Modal):
         main_view = self.parent.main_view
         slot_list = main_view.crews_a if self.parent.team == "A" else main_view.crews_b
 
+        # Assign event role to commander
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(self.parent.commander, main_view.event_type)
+
         for i in range(MAX_CREWS_PER_TEAM):
             if slot_list[i] is None:
                 slot_list[i] = {
@@ -700,7 +799,7 @@ class CrewNameModal(Modal):
                     "driver": self.driver
                 }
                 await main_view.update_embed(interaction)
-                await interaction.response.send_message(f"✅ Crew '{crew_name}' registered!", ephemeral=True)
+                await interaction.response.send_message(f"✅ Crew '{crew_name}' registered! Event roles assigned to all members.", ephemeral=True)
                 return
 
         await interaction.response.send_message("❌ Team is full!", ephemeral=True)

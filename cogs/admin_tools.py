@@ -1,460 +1,808 @@
-# cogs/admin_tools.py - Administrative tools and server configuration
+# cogs/armor_events.py - Complete working version with automatic role assignment
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord.ui import View, Button, Select, Modal, TextInput
+from discord.ui import View, Button, UserSelect, Select, Modal, TextInput
 import logging
-from typing import Optional, List, Dict
+import datetime
+import pytz
+from typing import Optional, Dict, List
 
 from utils.database import EventDatabase
 from utils.config import *
 
 logger = logging.getLogger(__name__)
 
-class AdminTools(commands.Cog):
-    """Administrative tools and server configuration"""
-    
+class ArmorEvents(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = EventDatabase()
-        logger.info("Admin Tools cog initialized")
+        logger.info("Armor Events cog initialized")
 
-    def has_admin_permissions(self, user: discord.Member) -> bool:
-        """Check if user has admin permissions"""
-        if not hasattr(user, 'roles'):
-            return False
-        return any(role.name in ADMIN_ROLES for role in user.roles)
-
-    @app_commands.command(name="settings")
-    async def server_settings(self, interaction: discord.Interaction):
-        """Configure bot settings for this server"""
-        
-        if not self.has_admin_permissions(interaction.user):
-            await interaction.response.send_message(
-                f"❌ You need one of these roles: {', '.join(ADMIN_ROLES)}", 
-                ephemeral=True
-            )
-            return
-        
-        # Get current settings
-        settings = self.db.get_guild_settings(interaction.guild.id)
-        
-        embed = discord.Embed(
-            title="⚙️ Bot Configuration",
-            description="Configure bot settings for this server",
-            color=COLORS["info"]
-        )
-        
-        # Display current settings
-        embed.add_field(
-            name="🛡️ Admin Roles",
-            value=", ".join(settings['admin_roles']) or "None set",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📅 Event Settings",
-            value=f"**Auto Map Votes:** {'✅' if settings.get('auto_map_votes', True) else '❌'}\n"
-                  f"**Auto Role Assignment:** {'✅' if settings.get('auto_role_assignment', True) else '❌'}\n"
-                  f"**Recruitment System:** {'✅' if settings.get('recruitment_enabled', True) else '❌'}\n"
-                  f"**Max Crews per Team:** {settings.get('max_crews_per_team', 6)}",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="⏰ Reminder Times",
-            value=f"{', '.join(map(str, settings.get('reminder_times', [60, 30, 10])))} minutes before events",
-            inline=False
-        )
-        
-        view = BotSettingsView(settings, self.db)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-    @app_commands.command(name="purge_messages")
+    @app_commands.command(name="schedule_event")
     @app_commands.describe(
-        amount="Number of messages to delete (1-100)",
-        user="Only delete messages from this user (optional)"
+        event_type="Type of armor event",
+        date="Date in YYYY-MM-DD format (e.g., 2025-06-15)",
+        time="Time in HH:MM format, 24-hour (e.g., 20:00) - EST timezone",
+        map_vote_channel="Channel for map vote (optional - defaults to current channel)"
     )
-    async def purge_messages(self, interaction: discord.Interaction, amount: int, user: discord.Member = None):
-        """Delete multiple messages at once"""
-        
-        if not self.has_admin_permissions(interaction.user):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        
-        if amount < 1 or amount > 100:
-            await interaction.response.send_message("❌ Amount must be between 1 and 100.", ephemeral=True)
-            return
-        
-        # Check bot permissions
-        if not interaction.channel.permissions_for(interaction.guild.me).manage_messages:
-            await interaction.response.send_message("❌ I don't have permission to manage messages in this channel.", ephemeral=True)
-            return
-        
-        await interaction.response.defer(ephemeral=True)
-        
-        try:
-            if user:
-                # Delete messages from specific user
-                def check(m):
-                    return m.author == user
-                
-                deleted = await interaction.channel.purge(limit=amount, check=check)
-                await interaction.followup.send(f"✅ Deleted {len(deleted)} messages from {user.mention}.", ephemeral=True)
-            else:
-                # Delete any messages
-                deleted = await interaction.channel.purge(limit=amount)
-                await interaction.followup.send(f"✅ Deleted {len(deleted)} messages.", ephemeral=True)
-                
-        except discord.Forbidden:
-            await interaction.followup.send("❌ I don't have permission to delete messages.", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Error deleting messages: {e}", ephemeral=True)
-
-    @app_commands.command(name="role_manager")
-    @app_commands.describe(
-        action="What to do with the role",
-        role="The role to manage",
-        user="User to add/remove role from (optional - shows role info if not specified)"
-    )
-    @app_commands.choices(action=[
-        app_commands.Choice(name="Add to User", value="add"),
-        app_commands.Choice(name="Remove from User", value="remove"),
-        app_commands.Choice(name="Role Info", value="info"),
-        app_commands.Choice(name="List Members", value="members")
+    @app_commands.choices(event_type=[
+        app_commands.Choice(name="Saturday Brawl", value="saturday_brawl"),
+        app_commands.Choice(name="Sunday Operations", value="sunday_ops"),
+        app_commands.Choice(name="Training Event", value="training"),
+        app_commands.Choice(name="Tournament", value="tournament"),
+        app_commands.Choice(name="Custom Event", value="custom")
     ])
-    async def role_manager(self, interaction: discord.Interaction, action: app_commands.Choice[str], 
-                          role: discord.Role, user: discord.Member = None):
-        """Manage server roles"""
+    async def schedule_event(self, interaction: discord.Interaction, event_type: app_commands.Choice[str],
+                           date: str = None, time: str = None, map_vote_channel: discord.TextChannel = None):
         
-        if not self.has_admin_permissions(interaction.user):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        if not any(role.name in ADMIN_ROLES for role in interaction.user.roles):
+            await interaction.response.send_message("❌ You need admin permissions.", ephemeral=True)
             return
         
-        if action.value == "info":
-            embed = discord.Embed(
-                title=f"📋 Role Information: {role.name}",
-                color=role.color
-            )
-            
-            embed.add_field(name="ID", value=role.id, inline=True)
-            embed.add_field(name="Color", value=str(role.color), inline=True)
-            embed.add_field(name="Position", value=role.position, inline=True)
-            embed.add_field(name="Members", value=len(role.members), inline=True)
-            embed.add_field(name="Mentionable", value="✅" if role.mentionable else "❌", inline=True)
-            embed.add_field(name="Hoisted", value="✅" if role.hoist else "❌", inline=True)
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            
-        elif action.value == "members":
-            if not role.members:
-                await interaction.response.send_message(f"❌ No members have the role {role.mention}.", ephemeral=True)
-                return
-            
-            member_list = [member.mention for member in role.members[:20]]  # Limit to 20
-            if len(role.members) > 20:
-                member_list.append(f"... and {len(role.members) - 20} more")
-            
-            embed = discord.Embed(
-                title=f"👥 Members with role: {role.name}",
-                description="\n".join(member_list),
-                color=role.color
-            )
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            
-        elif action.value in ["add", "remove"]:
-            if not user:
-                await interaction.response.send_message("❌ You must specify a user for add/remove actions.", ephemeral=True)
-                return
-            
-            # Check permissions
-            if role >= interaction.guild.me.top_role:
-                await interaction.response.send_message("❌ I cannot manage this role (it's higher than my highest role).", ephemeral=True)
-                return
-            
-            if role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
-                await interaction.response.send_message("❌ You cannot manage this role (it's higher than your highest role).", ephemeral=True)
-                return
-            
+        # Parse datetime with EST timezone
+        event_datetime = None
+        if date:
+            if not time:
+                time = "20:00"
             try:
-                if action.value == "add":
-                    if role in user.roles:
-                        await interaction.response.send_message(f"❌ {user.mention} already has the role {role.mention}.", ephemeral=True)
-                        return
-                    
-                    await user.add_roles(role, reason=f"Added by {interaction.user}")
-                    await interaction.response.send_message(f"✅ Added role {role.mention} to {user.mention}.", ephemeral=True)
-                    
-                else:  # remove
-                    if role not in user.roles:
-                        await interaction.response.send_message(f"❌ {user.mention} doesn't have the role {role.mention}.", ephemeral=True)
-                        return
-                    
-                    await user.remove_roles(role, reason=f"Removed by {interaction.user}")
-                    await interaction.response.send_message(f"✅ Removed role {role.mention} from {user.mention}.", ephemeral=True)
-                    
-            except discord.Forbidden:
-                await interaction.response.send_message("❌ I don't have permission to manage this role.", ephemeral=True)
-            except Exception as e:
-                await interaction.response.send_message(f"❌ Error managing role: {e}", ephemeral=True)
+                date_obj = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+                time_obj = datetime.datetime.strptime(time, "%H:%M").time()
+                event_datetime = datetime.datetime.combine(date_obj, time_obj)
+                
+                # Convert to EST timezone
+                est = pytz.timezone("US/Eastern")
+                event_datetime = est.localize(event_datetime)
+                
+                # Check if in the past (compare with EST now)
+                if event_datetime < datetime.datetime.now(est):
+                    await interaction.response.send_message("❌ Cannot schedule in the past!", ephemeral=True)
+                    return
+            except ValueError:
+                await interaction.response.send_message("❌ Invalid date/time format.", ephemeral=True)
+                return
 
-    @app_commands.command(name="event_cleanup")
-    @app_commands.describe(days_old="Delete completed events older than this many days (default: 90)")
-    async def event_cleanup(self, interaction: discord.Interaction, days_old: int = 90):
-        """Clean up old completed events from the database"""
+        # Get preset (no custom title, use default)
+        preset = self.get_event_preset(event_type.value)
         
-        if not self.has_admin_permissions(interaction.user):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        
-        if days_old < 1 or days_old > 365:
-            await interaction.response.send_message("❌ Days must be between 1 and 365.", ephemeral=True)
-            return
-        
-        await interaction.response.defer(ephemeral=True)
-        
+        # Create event in database (with error handling)
         try:
-            # Get count before cleanup
-            stats_before = self.db.get_database_stats()
-            
-            # Perform cleanup
-            self.db.cleanup_old_data(days_old)
-            
-            # Get count after cleanup
-            stats_after = self.db.get_database_stats()
-            
-            events_cleaned = stats_before.get('events', 0) - stats_after.get('events', 0)
-            signups_cleaned = stats_before.get('signups', 0) - stats_after.get('signups', 0)
-            
-            embed = discord.Embed(
-                title="🧹 Database Cleanup Complete",
-                color=COLORS["success"]
+            event_id = self.db.create_event(
+                guild_id=interaction.guild.id,
+                channel_id=interaction.channel.id,
+                creator_id=interaction.user.id,
+                title=preset["title"],
+                description=preset["description"],
+                event_time=event_datetime,
+                event_type=event_type.value
             )
-            
-            embed.add_field(
-                name="Cleaned Up",
-                value=f"**Events:** {events_cleaned}\n**Signups:** {signups_cleaned}",
-                inline=True
-            )
-            
-            embed.add_field(
-                name="Remaining",
-                value=f"**Events:** {stats_after.get('events', 0)}\n**Signups:** {stats_after.get('signups', 0)}",
-                inline=True
-            )
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            
         except Exception as e:
-            await interaction.followup.send(f"❌ Error during cleanup: {e}", ephemeral=True)
+            # If database fails, create without it
+            logger.error(f"Database error: {e}")
+            event_id = 99999  # Fake ID
+        
+        # Create event signup with full functionality
+        view = EventSignupView(preset["title"], preset["description"], event_datetime, event_type.value, event_id)
+        embed = view.build_embed(interaction.user)
+        message = await interaction.channel.send(embed=embed, view=view)
+        view.message = message
+        
+        # Auto-create map vote (separate message) - Use selected channel or current channel
+        vote_channel = map_vote_channel if map_vote_channel else interaction.channel
+        map_vote_success = await self.create_map_vote(vote_channel, event_datetime, event_id)
+        
+        # Response
+        response = f"✅ {event_type.value.replace('_', ' ').title()} created!"
+        if event_datetime:
+            response += f"\n📅 <t:{int(event_datetime.timestamp())}:F>"
+        
+        if map_vote_success:
+            if map_vote_channel:
+                response += f"\n🗳️ Map vote created in {map_vote_channel.mention}!"
+            else:
+                response += f"\n🗳️ Map vote created automatically!"
+        else:
+            response += f"\n⚠️ Map vote could not be created (MapVoting cog not available)"
+            
+        await interaction.response.send_message(response, ephemeral=True)
 
-    @app_commands.command(name="database_stats")
-    async def database_stats(self, interaction: discord.Interaction):
-        """Show database statistics"""
-        
-        if not self.has_admin_permissions(interaction.user):
-            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-            return
-        
-        stats = self.db.get_database_stats()
-        
-        embed = discord.Embed(
-            title="📊 Database Statistics",
-            color=COLORS["info"]
-        )
-        
-        for table, count in stats.items():
-            embed.add_field(
-                name=table.replace('_', ' ').title(),
-                value=f"{count:,}",
-                inline=True
-            )
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+    def get_event_preset(self, event_type: str):
+        presets = {
+            "saturday_brawl": {
+                "title": "🮦 Saturday Tank Brawl",
+                "description": "**Victory Condition:** Team with the most time on the middle cap wins.\n**Format:** 6v6 Crew Battles"
+            },
+            "sunday_ops": {
+                "title": "🎯 Sunday Armor Operations", 
+                "description": "**Mission Type:** Combined Arms Operations\n**Format:** Tactical Gameplay"
+            },
+            "training": {
+                "title": "🎓 Armor Training Session",
+                "description": "**Focus:** Skill Development & Practice\n**Format:** Training Exercises"
+            },
+            "tournament": {
+                "title": "🏆 Armor Tournament",
+                "description": "**Format:** Competitive Bracket\n**Stakes:** Championship Event"
+            },
+            "custom": {
+                "title": "⚔️ Custom Armor Event",
+                "description": "**Format:** Custom Event\n**Details:** TBD"
+            }
+        }
+        return presets.get(event_type, presets["custom"])
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        """Called when the cog is ready"""
-        logger.info("Admin Tools cog is ready")
-
-# UI Components for Bot Settings
-
-class BotSettingsView(View):
-    def __init__(self, settings: Dict, db: EventDatabase):
-        super().__init__(timeout=TIMEOUTS["admin_controls"])
-        self.settings = settings
-        self.db = db
-        
-        self.add_item(ToggleAutoMapVotesButton(self))
-        self.add_item(ToggleAutoRolesButton(self))
-        self.add_item(ToggleRecruitmentButton(self))
-        self.add_item(EditAdminRolesButton(self))
-        self.add_item(EditReminderTimesButton(self))
-
-class ToggleAutoMapVotesButton(Button):
-    def __init__(self, parent):
-        current_state = parent.settings.get('auto_map_votes', True)
-        label = "🗳️ Disable Auto Map Votes" if current_state else "🗳️ Enable Auto Map Votes"
-        style = discord.ButtonStyle.danger if current_state else discord.ButtonStyle.success
-        
-        super().__init__(label=label, style=style)
-        self.parent = parent
-
-    async def callback(self, interaction: discord.Interaction):
-        current_state = self.parent.settings.get('auto_map_votes', True)
-        new_state = not current_state
-        
-        # Update database
-        self.parent.db.update_guild_setting(interaction.guild.id, 'auto_map_votes', new_state)
-        self.parent.settings['auto_map_votes'] = new_state
-        
-        # Update button
-        self.label = "🗳️ Disable Auto Map Votes" if new_state else "🗳️ Enable Auto Map Votes"
-        self.style = discord.ButtonStyle.danger if new_state else discord.ButtonStyle.success
-        
-        await interaction.response.send_message(
-            f"✅ Auto map votes {'enabled' if new_state else 'disabled'}.", 
-            ephemeral=True
-        )
-        await interaction.edit_original_response(view=self.parent)
-
-class ToggleAutoRolesButton(Button):
-    def __init__(self, parent):
-        current_state = parent.settings.get('auto_role_assignment', True)
-        label = "🎭 Disable Auto Roles" if current_state else "🎭 Enable Auto Roles"
-        style = discord.ButtonStyle.danger if current_state else discord.ButtonStyle.success
-        
-        super().__init__(label=label, style=style)
-        self.parent = parent
-
-    async def callback(self, interaction: discord.Interaction):
-        current_state = self.parent.settings.get('auto_role_assignment', True)
-        new_state = not current_state
-        
-        self.parent.db.update_guild_setting(interaction.guild.id, 'auto_role_assignment', new_state)
-        self.parent.settings['auto_role_assignment'] = new_state
-        
-        self.label = "🎭 Disable Auto Roles" if new_state else "🎭 Enable Auto Roles"
-        self.style = discord.ButtonStyle.danger if new_state else discord.ButtonStyle.success
-        
-        await interaction.response.send_message(
-            f"✅ Auto role assignment {'enabled' if new_state else 'disabled'}.", 
-            ephemeral=True
-        )
-        await interaction.edit_original_response(view=self.parent)
-
-class ToggleRecruitmentButton(Button):
-    def __init__(self, parent):
-        current_state = parent.settings.get('recruitment_enabled', True)
-        label = "🎯 Disable Recruitment" if current_state else "🎯 Enable Recruitment"
-        style = discord.ButtonStyle.danger if current_state else discord.ButtonStyle.success
-        
-        super().__init__(label=label, style=style)
-        self.parent = parent
-
-    async def callback(self, interaction: discord.Interaction):
-        current_state = self.parent.settings.get('recruitment_enabled', True)
-        new_state = not current_state
-        
-        self.parent.db.update_guild_setting(interaction.guild.id, 'recruitment_enabled', new_state)
-        self.parent.settings['recruitment_enabled'] = new_state
-        
-        self.label = "🎯 Disable Recruitment" if new_state else "🎯 Enable Recruitment"
-        self.style = discord.ButtonStyle.danger if new_state else discord.ButtonStyle.success
-        
-        await interaction.response.send_message(
-            f"✅ Recruitment system {'enabled' if new_state else 'disabled'}.", 
-            ephemeral=True
-        )
-        await interaction.edit_original_response(view=self.parent)
-
-class EditAdminRolesButton(Button):
-    def __init__(self, parent):
-        super().__init__(label="🛡️ Edit Admin Roles", style=discord.ButtonStyle.secondary)
-        self.parent = parent
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(EditAdminRolesModal(self.parent))
-
-class EditReminderTimesButton(Button):
-    def __init__(self, parent):
-        super().__init__(label="⏰ Edit Reminder Times", style=discord.ButtonStyle.secondary)
-        self.parent = parent
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(EditReminderTimesModal(self.parent))
-
-class EditAdminRolesModal(Modal):
-    def __init__(self, settings_view):
-        super().__init__(title="Edit Admin Roles")
-        self.settings_view = settings_view
-        
-        current_roles = ", ".join(self.settings_view.settings.get('admin_roles', []))
-        
-        self.roles_input = TextInput(
-            label="Admin Role Names",
-            placeholder="Moderator, Admin, Event Organizer",
-            default=current_roles,
-            style=discord.TextStyle.paragraph,
-            max_length=500
-        )
-        self.add_item(self.roles_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        role_names = [name.strip() for name in self.roles_input.value.split(',') if name.strip()]
-        
-        if not role_names:
-            await interaction.response.send_message("❌ You must specify at least one admin role.", ephemeral=True)
-            return
-        
-        # Update database
-        self.settings_view.db.update_guild_setting(interaction.guild.id, 'admin_roles', role_names)
-        self.settings_view.settings['admin_roles'] = role_names
-        
-        await interaction.response.send_message(
-            f"✅ Admin roles updated: {', '.join(role_names)}", 
-            ephemeral=True
-        )
-
-class EditReminderTimesModal(Modal):
-    def __init__(self, settings_view):
-        super().__init__(title="Edit Reminder Times")
-        self.settings_view = settings_view
-        
-        current_times = ", ".join(map(str, self.settings_view.settings.get('reminder_times', [60, 30, 10])))
-        
-        self.times_input = TextInput(
-            label="Reminder Times (minutes)",
-            placeholder="60, 30, 10",
-            default=current_times,
-            max_length=100
-        )
-        self.add_item(self.times_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
+    async def assign_event_role(self, user: discord.Member, event_type: str):
+        """Assign event-specific role to user"""
         try:
-            time_values = [int(time.strip()) for time in self.times_input.value.split(',') if time.strip()]
+            # Get or create event role
+            role_name = f"{event_type.replace('_', ' ').title()} Participant"
             
-            if not time_values:
-                await interaction.response.send_message("❌ You must specify at least one reminder time.", ephemeral=True)
+            # Try to find existing role
+            event_role = discord.utils.get(user.guild.roles, name=role_name)
+            
+            # Create role if it doesn't exist
+            if not event_role:
+                event_role = await user.guild.create_role(
+                    name=role_name,
+                    color=discord.Color.blue(),
+                    mentionable=True,
+                    reason=f"Auto-created for {event_type} events"
+                )
+                logger.info(f"Created new event role: {role_name}")
+            
+            # Assign role to user
+            if event_role not in user.roles:
+                await user.add_roles(event_role, reason=f"Joined {event_type} event")
+                logger.info(f"Assigned {role_name} to {user.display_name}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error assigning event role: {e}")
+            return False
+        
+        return False
+
+    async def remove_event_role(self, user: discord.Member, event_type: str):
+        """Remove event-specific role from user"""
+        try:
+            role_name = f"{event_type.replace('_', ' ').title()} Participant"
+            event_role = discord.utils.get(user.guild.roles, name=role_name)
+            
+            if event_role and event_role in user.roles:
+                await user.remove_roles(event_role, reason=f"Left {event_type} event")
+                logger.info(f"Removed {role_name} from {user.display_name}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error removing event role: {e}")
+            return False
+        
+        return False
+
+    async def create_map_vote(self, channel, event_datetime, event_id):
+        """Create map vote that ends 1 hour before event starts"""
+        try:
+            logger.info(f"🔍 DEBUG: Looking for MapVoting cog...")
+            map_voting_cog = self.bot.get_cog('MapVoting')
+            
+            if not map_voting_cog:
+                logger.warning(f"❌ DEBUG: MapVoting cog not found!")
+                logger.info(f"Available cogs: {list(self.bot.cogs.keys())}")
+                return False
+            
+            logger.info(f"✅ DEBUG: Found MapVoting cog")
+            
+            # Calculate vote duration with timezone awareness
+            if event_datetime:
+                est = pytz.timezone("US/Eastern")
+                now = datetime.datetime.now(est)
+                
+                # Calculate when the vote should END (1 hour before event)
+                vote_end_time = event_datetime - datetime.timedelta(hours=1)
+                
+                # Calculate how long the vote should run (from now until vote_end_time)
+                vote_duration_seconds = (vote_end_time - now).total_seconds()
+                vote_duration_minutes = int(vote_duration_seconds / 60)
+                
+                logger.info(f"🔍 DEBUG: Event time: {event_datetime}")
+                logger.info(f"🔍 DEBUG: Current time: {now}")
+                logger.info(f"🔍 DEBUG: Vote should END at: {vote_end_time}")
+                logger.info(f"🔍 DEBUG: Calculated vote duration: {vote_duration_minutes} minutes")
+                
+                # Handle edge cases
+                if vote_duration_minutes <= 15:
+                    # Event is very soon (less than 1 hour 15 minutes away)
+                    duration_minutes = 30  # Give at least 30 minutes
+                    logger.info(f"🔍 DEBUG: Event too soon, using minimum 30 minute vote")
+                else:
+                    # Use the calculated duration (vote ends 1 hour before event)
+                    # No maximum cap - vote runs however long needed
+                    duration_minutes = vote_duration_minutes
+                    logger.info(f"🔍 DEBUG: Using calculated duration to end 1 hour before event")
+            else:
+                # No event time set, use default 7 days
+                duration_minutes = 10080  # 7 days
+                logger.info(f"🔍 DEBUG: No event time set, using default 7 day vote")
+            
+            logger.info(f"🔍 DEBUG: Final vote duration: {duration_minutes} minutes ({duration_minutes/1440:.1f} days)")
+            actual_end_time = datetime.datetime.now(est) + datetime.timedelta(minutes=duration_minutes)
+            logger.info(f"🔍 DEBUG: Vote will actually end at: {actual_end_time}")
+            
+            # Create the map vote
+            if hasattr(map_voting_cog, 'create_auto_mapvote'):
+                result = await map_voting_cog.create_auto_mapvote(event_id, channel, duration_minutes)
+                if result:
+                    logger.info(f"✅ DEBUG: Map vote created successfully for {duration_minutes} minutes")
+                    return True
+                else:
+                    logger.error(f"❌ DEBUG: Map vote creation returned None/False")
+                    return False
+            else:
+                logger.error(f"❌ DEBUG: create_auto_mapvote method not found")
+                available_methods = [method for method in dir(map_voting_cog) if not method.startswith('_')]
+                logger.info(f"Available methods: {available_methods}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ DEBUG: Error creating map vote: {e}")
+            return False
+
+class EventSignupView(View):
+    def __init__(self, title, description, event_time=None, event_type="custom", event_id=None):
+        super().__init__(timeout=None)
+        self.title = title
+        self.description = description
+        self.event_time = event_time
+        self.event_type = event_type
+        self.event_id = event_id
+        self.message = None
+        
+        # Initialize data
+        self.commander_a = None
+        self.commander_b = None
+        self.crews_a = [None] * MAX_CREWS_PER_TEAM
+        self.crews_b = [None] * MAX_CREWS_PER_TEAM
+        self.recruits = []  # Changed from solo_players to recruits
+        
+        # Add buttons (WITH recruit system)
+        self.add_item(CommanderSelect(self))
+        self.add_item(JoinCrewAButton(self))
+        self.add_item(JoinCrewBButton(self))
+        self.add_item(RecruitMeButton(self))  # Changed from SoloSignupButton
+        self.add_item(RecruitPlayersButton(self))  # NEW button for commanders
+        self.add_item(EditCrewButton(self))
+        self.add_item(LeaveEventButton(self))
+
+    def build_embed(self, author=None):
+        embed = discord.Embed(title=self.title, description=self.description, color=0xFF0000)
+        
+        if self.event_time:
+            embed.add_field(name="⏰ Event Time", 
+                          value=f"<t:{int(self.event_time.timestamp())}:F>\n<t:{int(self.event_time.timestamp())}:R>", 
+                          inline=False)
+        
+        # Commanders
+        commanders = f"**Allies:** {self.commander_a.mention if self.commander_a else '[Unclaimed]'}\n"
+        commanders += f"**Axis:** {self.commander_b.mention if self.commander_b else '[Unclaimed]'}"
+        embed.add_field(name="👑 Commanders", value=commanders, inline=False)
+
+        # Format crews
+        def format_crew(slot):
+            if slot is None:
+                return "[Empty Slot]"
+            cmd = slot['commander'].mention
+            gun = slot['gunner'].mention if slot['gunner'] != slot['commander'] else "*Self*"
+            drv = slot['driver'].mention if slot['driver'] != slot['commander'] else "*Self*"
+            return f"**[{slot['crew_name']}]**\nCmd: {cmd}\nGun: {gun}\nDrv: {drv}"
+
+        allies_text = "\n\n".join([f"{i+1}. {format_crew(crew)}" for i, crew in enumerate(self.crews_a)])
+        axis_text = "\n\n".join([f"{i+1}. {format_crew(crew)}" for i, crew in enumerate(self.crews_b)])
+        
+        embed.add_field(name="🗾 Allies Crews", value=allies_text, inline=True)
+        embed.add_field(name="🔵 Axis Crews", value=axis_text, inline=True)
+        
+        # Available recruits (changed from solo players)
+        recruit_text = "\n".join([f"- {user.mention}" for user in self.recruits]) or "[None Available]"
+        embed.add_field(name="🎯 Available Recruits", value=recruit_text, inline=False)
+        
+        if author:
+            embed.set_footer(text=f"Created by {author.display_name}")
+        
+        return embed
+
+    def is_user_registered(self, user):
+        """Check if user is already registered"""
+        if user in [self.commander_a, self.commander_b]:
+            return True
+        for crew_list in [self.crews_a, self.crews_b]:
+            for crew in crew_list:
+                if isinstance(crew, dict) and user in [crew["commander"], crew["gunner"], crew["driver"]]:
+                    return True
+        return user in self.recruits
+
+    def get_user_crew(self, user):
+        """Get the crew and team for a user"""
+        for team, crew_list in [("A", self.crews_a), ("B", self.crews_b)]:
+            for i, crew in enumerate(crew_list):
+                if isinstance(crew, dict) and crew["commander"] == user:
+                    return crew, team, i
+        return None, None, None
+
+    def is_user_commander(self, user):
+        """Check if user is a crew commander"""
+        crew, team, slot_index = self.get_user_crew(user)
+        return crew is not None
+
+    async def update_embed(self, interaction):
+        if self.message:
+            embed = self.build_embed()
+            await self.message.edit(embed=embed, view=self)
+
+# UI Components with Role Assignment
+class CommanderSelect(Select):
+    def __init__(self, view):
+        options = [
+            discord.SelectOption(label="Allies Commander", value="A", emoji="🗾"),
+            discord.SelectOption(label="Axis Commander", value="B", emoji="🔵")
+        ]
+        super().__init__(placeholder="Become a Team Commander", options=options)
+        self.view_ref = view
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.view_ref.is_user_registered(interaction.user):
+            await interaction.response.send_message("❌ Already registered!", ephemeral=True)
+            return
+        
+        team = self.values[0]
+        if team == "A":
+            self.view_ref.commander_a = interaction.user
+        else:
+            self.view_ref.commander_b = interaction.user
+        
+        # Assign event role
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(interaction.user, self.view_ref.event_type)
+        
+        await self.view_ref.update_embed(interaction)
+        await interaction.response.send_message(f"✅ You are now {team} Commander! Event role assigned.", ephemeral=True)
+
+class JoinCrewAButton(Button):
+    def __init__(self, view):
+        super().__init__(label="🗾 Join Allies Crew", style=discord.ButtonStyle.primary)
+        self.view_ref = view
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.view_ref.is_user_registered(interaction.user):
+            await interaction.response.send_message("❌ Already registered!", ephemeral=True)
+            return
+        await interaction.response.send_message(view=CrewSelectView(self.view_ref, "A", interaction.user), ephemeral=True)
+
+class JoinCrewBButton(Button):
+    def __init__(self, view):
+        super().__init__(label="🔵 Join Axis Crew", style=discord.ButtonStyle.danger)
+        self.view_ref = view
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.view_ref.is_user_registered(interaction.user):
+            await interaction.response.send_message("❌ Already registered!", ephemeral=True)
+            return
+        await interaction.response.send_message(view=CrewSelectView(self.view_ref, "B", interaction.user), ephemeral=True)
+
+class RecruitMeButton(Button):
+    def __init__(self, view):
+        super().__init__(label="🎯 Recruit Me", style=discord.ButtonStyle.success)
+        self.view_ref = view
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.view_ref.is_user_registered(interaction.user):
+            await interaction.response.send_message("❌ Already registered!", ephemeral=True)
+            return
+        
+        self.view_ref.recruits.append(interaction.user)
+        
+        # Assign event role
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(interaction.user, self.view_ref.event_type)
+        
+        await self.view_ref.update_embed(interaction)
+        await interaction.response.send_message("✅ Added to recruit pool! Event role assigned.", ephemeral=True)
+
+class RecruitPlayersButton(Button):
+    def __init__(self, view):
+        super().__init__(label="👥 Recruit Players", style=discord.ButtonStyle.secondary)
+        self.view_ref = view
+
+    async def callback(self, interaction: discord.Interaction):
+        # Check if user is a crew commander
+        if not self.view_ref.is_user_commander(interaction.user):
+            await interaction.response.send_message("⚠️ Only crew commanders can recruit players.", ephemeral=True)
+            return
+        
+        # Check if there are any recruits available
+        if not self.view_ref.recruits:
+            await interaction.response.send_message("⚠️ No recruits available to recruit.", ephemeral=True)
+            return
+        
+        await interaction.response.send_message(view=RecruitSelectionView(self.view_ref, interaction.user), ephemeral=True)
+
+class EditCrewButton(Button):
+    def __init__(self, view):
+        super().__init__(label="✏️ Edit My Crew", style=discord.ButtonStyle.secondary)
+        self.view_ref = view
+
+    async def callback(self, interaction: discord.Interaction):
+        crew, team, slot_index = self.view_ref.get_user_crew(interaction.user)
+        
+        if not crew:
+            await interaction.response.send_message("⚠️ You must be a crew commander to edit your crew.", ephemeral=True)
+            return
+        
+        await interaction.response.send_message(view=EditCrewView(self.view_ref, crew, team, slot_index), ephemeral=True)
+
+class LeaveEventButton(Button):
+    def __init__(self, view):
+        super().__init__(label="❌ Leave Event", style=discord.ButtonStyle.danger)
+        self.view_ref = view
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view_ref
+        user = interaction.user
+        removed = False
+
+        # Remove from all positions
+        if user == view.commander_a:
+            view.commander_a = None
+            removed = True
+        elif user == view.commander_b:
+            view.commander_b = None
+            removed = True
+
+        for i in range(MAX_CREWS_PER_TEAM):
+            if isinstance(view.crews_a[i], dict):
+                crew = view.crews_a[i]
+                if user in [crew["commander"], crew["gunner"], crew["driver"]]:
+                    view.crews_a[i] = None
+                    removed = True
+            if isinstance(view.crews_b[i], dict):
+                crew = view.crews_b[i]
+                if user in [crew["commander"], crew["gunner"], crew["driver"]]:
+                    view.crews_b[i] = None
+                    removed = True
+
+        if user in view.recruits:
+            view.recruits.remove(user)
+            removed = True
+
+        if removed:
+            # Remove event role
+            armor_events_cog = interaction.client.get_cog('ArmorEvents')
+            if armor_events_cog:
+                await armor_events_cog.remove_event_role(interaction.user, view.event_type)
+            
+            await view.update_embed(interaction)
+            await interaction.response.send_message("❌ Removed from event! Event role removed.", ephemeral=True)
+        else:
+            await interaction.response.send_message("⚠️ Not registered!", ephemeral=True)
+
+# NEW: Recruit Selection System
+class RecruitSelectionView(View):
+    def __init__(self, main_view, commander):
+        super().__init__(timeout=300)
+        self.main_view = main_view
+        self.commander = commander
+        self.selected_recruit = None
+        
+        # Get commander's crew info
+        self.crew, self.team, self.slot_index = main_view.get_user_crew(commander)
+        
+        self.add_item(RecruitSelect(self))
+
+class RecruitSelect(Select):
+    def __init__(self, parent):
+        # Create options from available recruits
+        options = []
+        for recruit in parent.main_view.recruits:
+            options.append(discord.SelectOption(
+                label=recruit.display_name,
+                value=str(recruit.id),
+                description=f"Recruit {recruit.display_name}"
+            ))
+        
+        super().__init__(
+            placeholder="Select a recruit to add to your crew...",
+            options=options[:25],  # Discord limit
+            min_values=1,
+            max_values=1
+        )
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        # Find the selected recruit
+        selected_id = int(self.values[0])
+        selected_recruit = None
+        
+        for recruit in self.parent.main_view.recruits:
+            if recruit.id == selected_id:
+                selected_recruit = recruit
+                break
+        
+        if not selected_recruit:
+            await interaction.response.send_message("❌ Recruit not found!", ephemeral=True)
+            return
+        
+        self.parent.selected_recruit = selected_recruit
+        
+        # Now show position selection
+        await interaction.response.send_message(
+            f"Selected **{selected_recruit.display_name}** - choose their position:",
+            view=PositionSelectView(self.parent),
+            ephemeral=True
+        )
+
+class PositionSelectView(View):
+    def __init__(self, parent):
+        super().__init__(timeout=300)
+        self.parent = parent
+        
+        self.add_item(AssignGunnerButton(parent))
+        self.add_item(AssignDriverButton(parent))
+
+class AssignGunnerButton(Button):
+    def __init__(self, parent):
+        super().__init__(label="🎯 Assign as Gunner", style=discord.ButtonStyle.primary)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        recruit = self.parent.selected_recruit
+        crew = self.parent.crew
+        
+        # Assign recruit as gunner
+        crew['gunner'] = recruit
+        
+        # Remove from recruit pool
+        self.parent.main_view.recruits.remove(recruit)
+        
+        await self.parent.main_view.update_embed(interaction)
+        await interaction.response.send_message(
+            f"✅ **{recruit.display_name}** recruited as gunner for **{crew['crew_name']}**!",
+            ephemeral=True
+        )
+
+class AssignDriverButton(Button):
+    def __init__(self, parent):
+        super().__init__(label="🚗 Assign as Driver", style=discord.ButtonStyle.secondary)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        recruit = self.parent.selected_recruit
+        crew = self.parent.crew
+        
+        # Assign recruit as driver
+        crew['driver'] = recruit
+        
+        # Remove from recruit pool
+        self.parent.main_view.recruits.remove(recruit)
+        
+        await self.parent.main_view.update_embed(interaction)
+        await interaction.response.send_message(
+            f"✅ **{recruit.display_name}** recruited as driver for **{crew['crew_name']}**!",
+            ephemeral=True
+        )
+
+# Edit Crew System (unchanged)
+class EditCrewView(View):
+    def __init__(self, main_view, crew, team, slot_index):
+        super().__init__(timeout=300)
+        self.main_view = main_view
+        self.crew = crew
+        self.team = team
+        self.slot_index = slot_index
+        
+        self.add_item(EditGunnerButton(self))
+        self.add_item(EditDriverButton(self))
+        self.add_item(EditCrewNameButton(self))
+
+class EditGunnerButton(Button):
+    def __init__(self, parent):
+        super().__init__(label="🎯 Change Gunner", style=discord.ButtonStyle.secondary)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(view=EditGunnerView(self.parent), ephemeral=True)
+
+class EditDriverButton(Button):
+    def __init__(self, parent):
+        super().__init__(label="🚗 Change Driver", style=discord.ButtonStyle.secondary)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(view=EditDriverView(self.parent), ephemeral=True)
+
+class EditCrewNameButton(Button):
+    def __init__(self, parent):
+        super().__init__(label="📝 Change Name", style=discord.ButtonStyle.secondary)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(EditCrewNameModal(self.parent))
+
+class EditGunnerView(View):
+    def __init__(self, parent):
+        super().__init__(timeout=300)
+        self.parent = parent
+        self.add_item(UpdateGunnerSelect(self))
+
+class UpdateGunnerSelect(UserSelect):
+    def __init__(self, parent):
+        super().__init__(placeholder="Select new gunner (or leave empty to clear)", min_values=0, max_values=1)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values:
+            new_gunner = self.values[0]
+            if self.parent.main_view.is_user_registered(new_gunner):
+                await interaction.response.send_message("❌ User already registered!", ephemeral=True)
                 return
             
-            if any(t < 1 or t > 10080 for t in time_values):  # Max 1 week
-                await interaction.response.send_message("❌ Reminder times must be between 1 and 10080 minutes.", ephemeral=True)
+            # Assign event role to new gunner
+            armor_events_cog = interaction.client.get_cog('ArmorEvents')
+            if armor_events_cog:
+                await armor_events_cog.assign_event_role(new_gunner, self.parent.main_view.event_type)
+            
+            self.parent.crew['gunner'] = new_gunner
+            await interaction.response.send_message(f"✅ Gunner updated to {new_gunner.mention}! Event role assigned.", ephemeral=True)
+        else:
+            self.parent.crew['gunner'] = self.parent.crew['commander']
+            await interaction.response.send_message("✅ Gunner cleared - commander will gun!", ephemeral=True)
+        
+        await self.parent.main_view.update_embed(interaction)
+
+class EditDriverView(View):
+    def __init__(self, parent):
+        super().__init__(timeout=300)
+        self.parent = parent
+        self.add_item(UpdateDriverSelect(self))
+
+class UpdateDriverSelect(UserSelect):
+    def __init__(self, parent):
+        super().__init__(placeholder="Select new driver (or leave empty to clear)", min_values=0, max_values=1)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values:
+            new_driver = self.values[0]
+            if self.parent.main_view.is_user_registered(new_driver):
+                await interaction.response.send_message("❌ User already registered!", ephemeral=True)
                 return
             
-            # Update database
-            self.settings_view.db.update_guild_setting(interaction.guild.id, 'reminder_times', time_values)
-            self.settings_view.settings['reminder_times'] = time_values
-            
-            await interaction.response.send_message(
-                f"✅ Reminder times updated: {', '.join(map(str, time_values))} minutes", 
-                ephemeral=True
-            )
-            
-        except ValueError:
-            await interaction.response.send_message("❌ Please enter valid numbers separated by commas.", ephemeral=True)
+            # Assign event role to new driver
+            armor_events_cog = interaction.client.get_cog('ArmorEvents')
+            if armor_events_cog:
+                await armor_events_cog.assign_event_role(new_driver, self.parent.main_view.event_type)
+                
+            self.parent.crew['driver'] = new_driver
+            await interaction.response.send_message(f"✅ Driver updated to {new_driver.mention}! Event role assigned.", ephemeral=True)
+        else:
+            self.parent.crew['driver'] = self.parent.crew['commander']
+            await interaction.response.send_message("✅ Driver cleared - commander will drive!", ephemeral=True)
+        
+        await self.parent.main_view.update_embed(interaction)
+
+class EditCrewNameModal(Modal):
+    def __init__(self, parent):
+        super().__init__(title="Edit Crew Name")
+        self.parent = parent
+        
+        self.name_input = TextInput(
+            label="New Crew Name",
+            placeholder="Enter new crew name...",
+            default=self.parent.crew['crew_name'],
+            max_length=30
+        )
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_name = self.name_input.value.strip()
+        if not new_name:
+            await interaction.response.send_message("❌ Crew name cannot be empty!", ephemeral=True)
+            return
+        
+        self.parent.crew['crew_name'] = new_name
+        await self.parent.main_view.update_embed(interaction)
+        await interaction.response.send_message(f"✅ Crew name updated to '{new_name}'!", ephemeral=True)
+
+# Crew selection system with role assignment
+class CrewSelectView(View):
+    def __init__(self, main_view, team, commander):
+        super().__init__(timeout=300)
+        self.main_view = main_view
+        self.team = team
+        self.commander = commander
+        self.gunner = None
+        self.add_item(GunnerSelect(self))
+
+class GunnerSelect(UserSelect):
+    def __init__(self, parent):
+        super().__init__(placeholder="Select Gunner", min_values=1, max_values=1)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.parent.main_view.is_user_registered(self.values[0]):
+            await interaction.response.send_message("❌ User already registered!", ephemeral=True)
+            return
+        
+        self.parent.gunner = self.values[0]
+        
+        # Assign event role to gunner
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(self.parent.gunner, self.parent.main_view.event_type)
+        
+        await interaction.response.send_message(view=DriverSelectView(self.parent), ephemeral=True)
+
+class DriverSelectView(View):
+    def __init__(self, parent):
+        super().__init__(timeout=300)
+        self.parent = parent
+        self.add_item(DriverSelect(parent))
+
+class DriverSelect(UserSelect):
+    def __init__(self, parent):
+        super().__init__(placeholder="Select Driver", min_values=1, max_values=1)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.parent.main_view.is_user_registered(self.values[0]):
+            await interaction.response.send_message("❌ User already registered!", ephemeral=True)
+            return
+        
+        driver = self.values[0]
+        
+        # Assign event role to driver
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(driver, self.parent.main_view.event_type)
+        
+        await interaction.response.send_modal(CrewNameModal(self.parent, driver))
+
+class CrewNameModal(Modal):
+    def __init__(self, parent, driver):
+        super().__init__(title="Name Your Crew")
+        self.parent = parent
+        self.driver = driver
+        self.name_input = TextInput(
+            label="Crew Name",
+            placeholder="Enter crew name...",
+            default=f"{self.parent.commander.display_name}'s Crew",
+            max_length=30
+        )
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        crew_name = self.name_input.value.strip() or f"{self.parent.commander.display_name}'s Crew"
+        main_view = self.parent.main_view
+        slot_list = main_view.crews_a if self.parent.team == "A" else main_view.crews_b
+
+        # Assign event role to commander
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            await armor_events_cog.assign_event_role(self.parent.commander, main_view.event_type)
+
+        for i in range(MAX_CREWS_PER_TEAM):
+            if slot_list[i] is None:
+                slot_list[i] = {
+                    "commander": self.parent.commander,
+                    "crew_name": crew_name,
+                    "gunner": self.parent.gunner,
+                    "driver": self.driver
+                }
+                await main_view.update_embed(interaction)
+                await interaction.response.send_message(f"✅ Crew '{crew_name}' registered! Event roles assigned to all members.", ephemeral=True)
+                return
+
+        await interaction.response.send_message("❌ Team is full!", ephemeral=True)
 
 async def setup(bot):
-    await bot.add_cog(AdminTools(bot))
+    await bot.add_cog(ArmorEvents(bot))
