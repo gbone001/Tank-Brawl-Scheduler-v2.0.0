@@ -1,4 +1,4 @@
-# cogs/armor_events.py - Complete working version with automatic role assignment
+# cogs/armor_events.py - Complete working version with persistent crew integration
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -344,12 +344,13 @@ class EventSignupView(View):
         self.crews_b = [None] * MAX_CREWS_PER_TEAM
         self.recruits = []  # Changed from solo_players to recruits
         
-        # Add buttons (WITH recruit system)
+        # Add buttons WITH persistent crew integration
         self.add_item(CommanderSelect(self))
         self.add_item(JoinCrewAButton(self))
         self.add_item(JoinCrewBButton(self))
-        self.add_item(RecruitMeButton(self))  # Changed from SoloSignupButton
-        self.add_item(RecruitPlayersButton(self))  # NEW button for commanders
+        self.add_item(JoinWithCrewButton(self))  # NEW: Join with persistent crew
+        self.add_item(RecruitMeButton(self))
+        self.add_item(RecruitPlayersButton(self))
         self.add_item(EditCrewButton(self))
         self.add_item(LeaveEventButton(self))
 
@@ -373,7 +374,10 @@ class EventSignupView(View):
             cmd = slot['commander'].mention
             gun = slot['gunner'].mention if slot['gunner'] != slot['commander'] else "*Self*"
             drv = slot['driver'].mention if slot['driver'] != slot['commander'] else "*Self*"
-            return f"**[{slot['crew_name']}]**\nCmd: {cmd}\nGun: {gun}\nDrv: {drv}"
+            crew_tag = f"[{slot['crew_name']}]"
+            if slot.get('persistent_crew_id'):
+                crew_tag += " 🔗"  # Indicate it's a persistent crew
+            return f"**{crew_tag}**\nCmd: {cmd}\nGun: {gun}\nDrv: {drv}"
 
         allies_text = "\n\n".join([f"{i+1}. {format_crew(crew)}" for i, crew in enumerate(self.crews_a)])
         axis_text = "\n\n".join([f"{i+1}. {format_crew(crew)}" for i, crew in enumerate(self.crews_b)])
@@ -384,6 +388,9 @@ class EventSignupView(View):
         # Available recruits (changed from solo players)
         recruit_text = "\n".join([f"- {user.mention}" for user in self.recruits]) or "[None Available]"
         embed.add_field(name="🎯 Available Recruits", value=recruit_text, inline=False)
+        
+        # Add legend
+        embed.add_field(name="🔗 Legend", value="🔗 = Persistent Crew", inline=False)
         
         if author:
             embed.set_footer(text=f"Created by {author.display_name}")
@@ -482,9 +489,60 @@ class JoinCrewBButton(Button):
         
         await interaction.response.send_message(view=CrewSelectView(self.view_ref, "B", interaction.user), ephemeral=True)
 
+class JoinWithCrewButton(Button):
+    def __init__(self, view):
+        super().__init__(label="🔗 Join with My Crew", style=discord.ButtonStyle.success, row=1)
+        self.view_ref = view
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.view_ref.is_user_registered(interaction.user):
+            await interaction.response.send_message("❌ Already registered!", ephemeral=True)
+            return
+        
+        # Get user's persistent crews where they're commander
+        crew_cog = interaction.client.get_cog('CrewManagement')
+        if not crew_cog:
+            await interaction.response.send_message("❌ Crew management system not available.", ephemeral=True)
+            return
+        
+        user_crews = crew_cog.db.get_user_crews(interaction.user.id, interaction.guild.id)
+        commander_crews = [crew for crew in user_crews if crew['commander_id'] == interaction.user.id]
+        
+        if not commander_crews:
+            await interaction.response.send_message(
+                "❌ You must be a crew commander to join with your crew.\nUse `/crew_panel` to create a crew first!",
+                ephemeral=True
+            )
+            return
+        
+        # Check if any crew members are already registered
+        for crew in commander_crews:
+            members = [crew['commander_id'], crew['gunner_id'], crew['driver_id']]
+            for member_id in members:
+                if member_id:
+                    member = interaction.guild.get_member(member_id)
+                    if member and self.view_ref.is_user_registered(member):
+                        await interaction.response.send_message(
+                            f"❌ Crew member {member.mention} is already registered for this event!",
+                            ephemeral=True
+                        )
+                        return
+        
+        if len(commander_crews) == 1:
+            await interaction.response.send_message(
+                view=PersistentCrewTeamSelectView(self.view_ref, commander_crews[0]),
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "Select which crew to join with:",
+                view=PersistentCrewSelectionView(self.view_ref, commander_crews),
+                ephemeral=True
+            )
+
 class RecruitMeButton(Button):
     def __init__(self, view):
-        super().__init__(label="🎯 Recruit Me", style=discord.ButtonStyle.success)
+        super().__init__(label="🎯 Recruit Me", style=discord.ButtonStyle.secondary, row=1)
         self.view_ref = view
 
     async def callback(self, interaction: discord.Interaction):
@@ -504,7 +562,7 @@ class RecruitMeButton(Button):
 
 class RecruitPlayersButton(Button):
     def __init__(self, view):
-        super().__init__(label="👥 Recruit Players", style=discord.ButtonStyle.secondary)
+        super().__init__(label="👥 Recruit Players", style=discord.ButtonStyle.secondary, row=1)
         self.view_ref = view
 
     async def callback(self, interaction: discord.Interaction):
@@ -522,7 +580,7 @@ class RecruitPlayersButton(Button):
 
 class EditCrewButton(Button):
     def __init__(self, view):
-        super().__init__(label="✏️ Edit My Crew", style=discord.ButtonStyle.secondary)
+        super().__init__(label="✏️ Edit My Crew", style=discord.ButtonStyle.secondary, row=2)
         self.view_ref = view
 
     async def callback(self, interaction: discord.Interaction):
@@ -536,7 +594,7 @@ class EditCrewButton(Button):
 
 class LeaveEventButton(Button):
     def __init__(self, view):
-        super().__init__(label="❌ Leave Event", style=discord.ButtonStyle.danger)
+        super().__init__(label="❌ Leave Event", style=discord.ButtonStyle.danger, row=2)
         self.view_ref = view
 
     async def callback(self, interaction: discord.Interaction):
@@ -578,6 +636,185 @@ class LeaveEventButton(Button):
             await interaction.response.send_message("❌ Removed from event! All event roles removed.", ephemeral=True)
         else:
             await interaction.response.send_message("⚠️ Not registered!", ephemeral=True)
+
+# NEW: Persistent Crew Integration Components
+
+class PersistentCrewSelectionView(View):
+    def __init__(self, main_view, crews):
+        super().__init__(timeout=300)
+        self.main_view = main_view
+        self.crews = crews
+        self.add_item(PersistentCrewDropdown(self))
+
+class PersistentCrewDropdown(Select):
+    def __init__(self, parent):
+        options = [
+            discord.SelectOption(
+                label=crew['crew_name'],
+                value=str(crew['id']),
+                description=f"W:{crew['wins']} L:{crew['losses']} - Join with this crew"
+            )
+            for crew in parent.crews[:25]
+        ]
+        
+        super().__init__(placeholder="Select crew to join event with", options=options)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        crew_id = int(self.values[0])
+        selected_crew = None
+        
+        for crew in self.parent.crews:
+            if crew['id'] == crew_id:
+                selected_crew = crew
+                break
+        
+        if selected_crew:
+            await interaction.response.send_message(
+                f"Selected crew: **{selected_crew['crew_name']}**\nChoose your team:",
+                view=PersistentCrewTeamSelectView(self.parent.main_view, selected_crew),
+                ephemeral=True
+            )
+
+class PersistentCrewTeamSelectView(View):
+    def __init__(self, main_view, crew):
+        super().__init__(timeout=300)
+        self.main_view = main_view
+        self.crew = crew
+        
+        self.add_item(JoinAlliesWithCrewButton(self))
+        self.add_item(JoinAxisWithCrewButton(self))
+
+class JoinAlliesWithCrewButton(Button):
+    def __init__(self, parent):
+        super().__init__(label="🗾 Join Allies", style=discord.ButtonStyle.primary)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.join_with_crew(interaction, "A")
+
+    async def join_with_crew(self, interaction, team):
+        crew = self.parent.crew
+        main_view = self.parent.main_view
+        
+        # Get guild members
+        guild = interaction.guild
+        commander = guild.get_member(crew['commander_id'])
+        gunner = guild.get_member(crew['gunner_id']) if crew['gunner_id'] else commander
+        driver = guild.get_member(crew['driver_id']) if crew['driver_id'] else commander
+        
+        # Check if any are already registered
+        for member in [commander, gunner, driver]:
+            if member and main_view.is_user_registered(member):
+                await interaction.response.send_message(
+                    f"❌ {member.mention} is already registered for this event!",
+                    ephemeral=True
+                )
+                return
+        
+        # Find empty slot
+        slot_list = main_view.crews_a if team == "A" else main_view.crews_b
+        empty_slot = None
+        
+        for i in range(MAX_CREWS_PER_TEAM):
+            if slot_list[i] is None:
+                empty_slot = i
+                break
+        
+        if empty_slot is None:
+            team_name = "Allies" if team == "A" else "Axis"
+            await interaction.response.send_message(f"❌ {team_name} team is full!", ephemeral=True)
+            return
+        
+        # Create crew entry
+        slot_list[empty_slot] = {
+            "commander": commander,
+            "crew_name": crew['crew_name'],
+            "gunner": gunner,
+            "driver": driver,
+            "persistent_crew_id": crew['id']  # Link to persistent crew
+        }
+        
+        # Assign roles to all crew members
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            for member in [commander, gunner, driver]:
+                if member:
+                    await armor_events_cog.assign_event_role(member, main_view.event_type, team)
+        
+        await main_view.update_embed(interaction)
+        team_name = "Allies" if team == "A" else "Axis"
+        await interaction.response.send_message(
+            f"✅ Crew **{crew['crew_name']}** joined {team_name} team! All members assigned team roles.",
+            ephemeral=True
+        )
+
+class JoinAxisWithCrewButton(Button):
+    def __init__(self, parent):
+        super().__init__(label="🔵 Join Axis", style=discord.ButtonStyle.danger)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.join_with_crew(interaction, "B")
+
+    async def join_with_crew(self, interaction, team):
+        crew = self.parent.crew
+        main_view = self.parent.main_view
+        
+        # Get guild members
+        guild = interaction.guild
+        commander = guild.get_member(crew['commander_id'])
+        gunner = guild.get_member(crew['gunner_id']) if crew['gunner_id'] else commander
+        driver = guild.get_member(crew['driver_id']) if crew['driver_id'] else commander
+        
+        # Check if any are already registered
+        for member in [commander, gunner, driver]:
+            if member and main_view.is_user_registered(member):
+                await interaction.response.send_message(
+                    f"❌ {member.mention} is already registered for this event!",
+                    ephemeral=True
+                )
+                return
+        
+        # Find empty slot
+        slot_list = main_view.crews_a if team == "A" else main_view.crews_b
+        empty_slot = None
+        
+        for i in range(MAX_CREWS_PER_TEAM):
+            if slot_list[i] is None:
+                empty_slot = i
+                break
+        
+        if empty_slot is None:
+            team_name = "Allies" if team == "A" else "Axis"
+            await interaction.response.send_message(f"❌ {team_name} team is full!", ephemeral=True)
+            return
+        
+        # Create crew entry
+        slot_list[empty_slot] = {
+            "commander": commander,
+            "crew_name": crew['crew_name'],
+            "gunner": gunner,
+            "driver": driver,
+            "persistent_crew_id": crew['id']  # Link to persistent crew
+        }
+        
+        # Assign roles to all crew members
+        armor_events_cog = interaction.client.get_cog('ArmorEvents')
+        if armor_events_cog:
+            for member in [commander, gunner, driver]:
+                if member:
+                    await armor_events_cog.assign_event_role(member, main_view.event_type, team)
+        
+        await main_view.update_embed(interaction)
+        team_name = "Allies" if team == "A" else "Axis"
+        await interaction.response.send_message(
+            f"✅ Crew **{crew['crew_name']}** joined {team_name} team! All members assigned team roles.",
+            ephemeral=True
+        )
+
+# Keep all the existing recruit and edit crew components from the previous version...
+# (All the other classes remain the same: RecruitSelectionView, AssignGunnerButton, etc.)
 
 # NEW: Recruit Selection System
 class RecruitSelectionView(View):
@@ -731,7 +968,7 @@ class EditCrewNameButton(Button):
         self.parent = parent
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(EditCrewNameModal(self.parent))
+        await interaction.response.send_message("⚠️ Cannot edit name of persistent crews in events. Edit in crew management panel.", ephemeral=True)
 
 class EditGunnerView(View):
     def __init__(self, parent):
