@@ -1,4 +1,4 @@
-# cogs/crew_management.py - Persistent crew management system with panel
+# cogs/crew_management.py - Persistent crew management system with public panel
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -199,7 +199,11 @@ class CrewManagement(commands.Cog):
 
     @app_commands.command(name="crew_panel")
     async def crew_panel(self, interaction: discord.Interaction):
-        """Open the crew management panel"""
+        """Create a crew management panel in this channel"""
+        
+        if not any(role.name in ADMIN_ROLES for role in interaction.user.roles):
+            await interaction.response.send_message("❌ Only admins can create crew panels.", ephemeral=True)
+            return
         
         embed = discord.Embed(
             title="🎛️ Crew Management Panel",
@@ -222,12 +226,14 @@ class CrewManagement(commands.Cog):
             name="💡 Tips",
             value="• Only commanders can edit and invite\n"
                   "• Crews persist across events\n"
-                  "• You can be in multiple crews",
+                  "• You can be in multiple crews\n"
+                  "• This panel stays active permanently",
             inline=False
         )
         
         view = CrewManagementPanelView(self.db)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.followup.send("✅ Crew management panel created in this channel!", ephemeral=True)
 
     # Helper methods
     def get_crew_by_name(self, guild_id: int, crew_name: str) -> Optional[Dict]:
@@ -446,7 +452,7 @@ class CrewManagement(commands.Cog):
 
 class CrewManagementPanelView(View):
     def __init__(self, db: EventDatabase):
-        super().__init__(timeout=TIMEOUTS["view"])
+        super().__init__(timeout=None)  # Persistent panel - no timeout
         self.db = db
         
         # Add all the crew management buttons
@@ -459,7 +465,12 @@ class CrewManagementPanelView(View):
 
 class CreateCrewPanelButton(Button):
     def __init__(self, db: EventDatabase):
-        super().__init__(label="🆕 Create Crew", style=discord.ButtonStyle.success, row=0)
+        super().__init__(
+            label="🆕 Create Crew", 
+            style=discord.ButtonStyle.success, 
+            row=0,
+            custom_id="crew_panel_create"
+        )
         self.db = db
 
     async def callback(self, interaction: discord.Interaction):
@@ -467,7 +478,12 @@ class CreateCrewPanelButton(Button):
 
 class CrewInfoPanelButton(Button):
     def __init__(self, db: EventDatabase):
-        super().__init__(label="ℹ️ Crew Info", style=discord.ButtonStyle.primary, row=0)
+        super().__init__(
+            label="ℹ️ Crew Info", 
+            style=discord.ButtonStyle.primary, 
+            row=0,
+            custom_id="crew_panel_info"
+        )
         self.db = db
 
     async def callback(self, interaction: discord.Interaction):
@@ -495,7 +511,12 @@ class CrewInfoPanelButton(Button):
 
 class EditCrewPanelButton(Button):
     def __init__(self, db: EventDatabase):
-        super().__init__(label="✏️ Edit Crew", style=discord.ButtonStyle.secondary, row=0)
+        super().__init__(
+            label="✏️ Edit Crew", 
+            style=discord.ButtonStyle.secondary, 
+            row=0,
+            custom_id="crew_panel_edit"
+        )
         self.db = db
 
     async def callback(self, interaction: discord.Interaction):
@@ -523,7 +544,12 @@ class EditCrewPanelButton(Button):
 
 class InvitePlayerPanelButton(Button):
     def __init__(self, db: EventDatabase):
-        super().__init__(label="📨 Invite Player", style=discord.ButtonStyle.secondary, row=1)
+        super().__init__(
+            label="📨 Invite Player", 
+            style=discord.ButtonStyle.secondary, 
+            row=1,
+            custom_id="crew_panel_invite"
+        )
         self.db = db
 
     async def callback(self, interaction: discord.Interaction):
@@ -545,7 +571,12 @@ class InvitePlayerPanelButton(Button):
 
 class LeaveCrewPanelButton(Button):
     def __init__(self, db: EventDatabase):
-        super().__init__(label="🚪 Leave Crew", style=discord.ButtonStyle.danger, row=1)
+        super().__init__(
+            label="🚪 Leave Crew", 
+            style=discord.ButtonStyle.danger, 
+            row=1,
+            custom_id="crew_panel_leave"
+        )
         self.db = db
 
     async def callback(self, interaction: discord.Interaction):
@@ -567,7 +598,12 @@ class LeaveCrewPanelButton(Button):
 
 class ListCrewsPanelButton(Button):
     def __init__(self, db: EventDatabase):
-        super().__init__(label="📜 List Crews", style=discord.ButtonStyle.primary, row=1)
+        super().__init__(
+            label="📜 List Crews", 
+            style=discord.ButtonStyle.primary, 
+            row=1,
+            custom_id="crew_panel_list"
+        )
         self.db = db
 
     async def callback(self, interaction: discord.Interaction):
