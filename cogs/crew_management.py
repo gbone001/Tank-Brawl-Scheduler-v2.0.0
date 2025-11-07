@@ -9,6 +9,10 @@ import sqlite3
 
 from utils.database import EventDatabase
 from utils.config import *
+from utils.permissions import (
+    has_scheduler_privileges,
+    PERMISSION_DENIED_MESSAGE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +23,20 @@ class CrewManagement(commands.Cog):
         self.bot = bot
         self.db = EventDatabase()
         logger.info("Crew Management cog initialized")
+
+    def _has_privileges(self, member: discord.Member) -> bool:
+        """Check whether the member can run privileged crew commands."""
+        allowed_roles = None
+        guild = getattr(member, "guild", None)
+
+        if guild:
+            try:
+                guild_settings = self.db.get_guild_settings(guild.id)
+                allowed_roles = guild_settings.get("admin_roles")
+            except Exception as exc:
+                logger.error(f"Failed to load guild settings for permissions: {exc}")
+
+        return has_scheduler_privileges(member, allowed_roles)
 
     @app_commands.command(name="create_crew")
     @app_commands.describe(
@@ -201,8 +219,8 @@ class CrewManagement(commands.Cog):
     async def crew_panel(self, interaction: discord.Interaction):
         """Create a crew management panel in this channel"""
         
-        if not any(role.name in ADMIN_ROLES for role in interaction.user.roles):
-            await interaction.response.send_message("❌ Only admins can create crew panels.", ephemeral=True)
+        if not self._has_privileges(interaction.user):
+            await interaction.response.send_message(PERMISSION_DENIED_MESSAGE, ephemeral=True)
             return
         
         embed = discord.Embed(

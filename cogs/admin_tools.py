@@ -8,6 +8,10 @@ from typing import Optional, List, Dict
 
 from utils.database import EventDatabase
 from utils.config import *
+from utils.permissions import (
+    has_scheduler_privileges,
+    PERMISSION_DENIED_MESSAGE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +24,19 @@ class AdminTools(commands.Cog):
         logger.info("Admin Tools cog initialized")
 
     def has_admin_permissions(self, user: discord.Member) -> bool:
-        """Check if user has admin permissions"""
-        if not hasattr(user, 'roles'):
+        """Check if user has the required elevated permissions"""
+        if not isinstance(user, discord.Member):
             return False
-        return any(role.name in ADMIN_ROLES for role in user.roles)
+
+        allowed_roles = None
+        if getattr(user, "guild", None):
+            try:
+                guild_settings = self.db.get_guild_settings(user.guild.id)
+                allowed_roles = guild_settings.get('admin_roles')
+            except Exception as exc:
+                logger.error(f"Failed to load guild settings for permissions: {exc}")
+
+        return has_scheduler_privileges(user, allowed_roles)
 
     @app_commands.command(name="settings")
     async def server_settings(self, interaction: discord.Interaction):
@@ -31,7 +44,7 @@ class AdminTools(commands.Cog):
         
         if not self.has_admin_permissions(interaction.user):
             await interaction.response.send_message(
-                f"❌ You need one of these roles: {', '.join(ADMIN_ROLES)}", 
+                PERMISSION_DENIED_MESSAGE,
                 ephemeral=True
             )
             return
@@ -82,7 +95,7 @@ class AdminTools(commands.Cog):
         """Manage event-specific roles for notifications and access control"""
         
         if not self.has_admin_permissions(interaction.user):
-            await interaction.response.send_message("❌ You need admin permissions.", ephemeral=True)
+            await interaction.response.send_message(PERMISSION_DENIED_MESSAGE, ephemeral=True)
             return
         
         if action.value == "list":

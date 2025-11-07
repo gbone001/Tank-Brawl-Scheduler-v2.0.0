@@ -460,7 +460,7 @@ class EventDatabase:
         if not result:
             # Create default settings
             default_settings = {
-                'admin_roles': json.dumps(["Moderator", "Admin", "Event Organizer"]),
+                'admin_roles': json.dumps(["Tank Ops", "Server Admin"]),
                 'event_channels': json.dumps([]),
                 'reminder_times': json.dumps([60, 30, 10]),
                 'default_event_duration': 120,

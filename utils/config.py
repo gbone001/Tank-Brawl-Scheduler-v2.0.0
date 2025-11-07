@@ -6,7 +6,7 @@ DEFAULT_EVENT_DURATION_HOURS = 2
 REMINDER_TIMES = [60, 30, 10]  # Minutes before event
 
 # Role configuration
-ADMIN_ROLES = ["Moderator", "Admin", "Event Organizer", "Staff"]
+ADMIN_ROLES = ["Tank Ops", "Server Admin"]
 REQUIRED_ROLES = ["Verified Member"]
 
 # Event types and their configurations

@@ -10,6 +10,10 @@ from typing import Optional, Dict, List
 
 from utils.database import EventDatabase
 from utils.config import *
+from utils.permissions import (
+    has_scheduler_privileges,
+    PERMISSION_DENIED_MESSAGE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,20 @@ class ArmorEvents(commands.Cog):
         self.bot = bot
         self.db = EventDatabase()
         logger.info("Armor Events cog initialized")
+
+    def _has_privileges(self, member: discord.Member) -> bool:
+        """Return True when the member can manage events."""
+        allowed_roles = None
+        guild = getattr(member, "guild", None)
+
+        if guild:
+            try:
+                guild_settings = self.db.get_guild_settings(guild.id)
+                allowed_roles = guild_settings.get("admin_roles")
+            except Exception as exc:
+                logger.error(f"Failed to load guild settings for permissions: {exc}")
+
+        return has_scheduler_privileges(member, allowed_roles)
 
     @app_commands.command(name="schedule_event")
     @app_commands.describe(
@@ -36,8 +54,8 @@ class ArmorEvents(commands.Cog):
     async def schedule_event(self, interaction: discord.Interaction, event_type: app_commands.Choice[str],
                            date: str = None, time: str = None, map_vote_channel: discord.TextChannel = None):
         
-        if not any(role.name in ADMIN_ROLES for role in interaction.user.roles):
-            await interaction.response.send_message("❌ You need admin permissions.", ephemeral=True)
+        if not self._has_privileges(interaction.user):
+            await interaction.response.send_message(PERMISSION_DENIED_MESSAGE, ephemeral=True)
             return
         
         # Parse datetime with EST timezone
@@ -305,8 +323,8 @@ class ArmorEvents(commands.Cog):
     @app_commands.command(name="list_roles")
     async def list_roles(self, interaction: discord.Interaction):
         """List all event roles in the server"""
-        if not any(role.name in ADMIN_ROLES for role in interaction.user.roles):
-            await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        if not self._has_privileges(interaction.user):
+            await interaction.response.send_message(PERMISSION_DENIED_MESSAGE, ephemeral=True)
             return
         
         # Find all roles that look like event roles

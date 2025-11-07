@@ -11,6 +11,12 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import sqlite3
 
+from utils.database import EventDatabase
+from utils.permissions import (
+    has_scheduler_privileges,
+    PERMISSION_REQUIREMENT_TEXT,
+)
+
 logger = logging.getLogger(__name__)
 
 # Map options for Hell Let Loose
@@ -46,7 +52,6 @@ UPDATE_INTERVALS = {
 }
 
 # Configuration
-ADMIN_ROLES = ["Moderator", "Admin", "Event Organizer"]
 COLORS = {
     "success": 0x00ff00,
     "error": 0xff0000,
@@ -292,6 +297,7 @@ class MapVoting(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.vote_db = VoteDatabase()
+        self.settings_db = EventDatabase()
         self.active_votes = {}
         
         # Track update intervals to optimize performance
@@ -301,6 +307,20 @@ class MapVoting(commands.Cog):
         self.restoration_complete = False
         
         logger.info("Enhanced Map Voting cog initialized with 7-day persistence")
+
+    def _has_privileges(self, member: discord.Member) -> bool:
+        """Check whether the member can run privileged voting commands."""
+        allowed_roles = None
+        guild = getattr(member, "guild", None)
+
+        if guild:
+            try:
+                guild_settings = self.settings_db.get_guild_settings(guild.id)
+                allowed_roles = guild_settings.get("admin_roles")
+            except Exception as exc:
+                logger.error(f"Failed to load guild settings for permissions: {exc}")
+
+        return has_scheduler_privileges(member, allowed_roles)
 
     async def cog_load(self):
         """Called when cog is loaded"""
@@ -849,9 +869,9 @@ class MapVoting(commands.Cog):
         
         # Check permissions - only creator or admins can end vote
         if (vote_data['creator_id'] != interaction.user.id and 
-            not any(role.name in ADMIN_ROLES for role in interaction.user.roles)):
+            not self._has_privileges(interaction.user)):
             await interaction.response.send_message(
-                "❌ You can only end votes you created, or you need admin permissions.", 
+                f"❌ You can only end votes you created, or you need {PERMISSION_REQUIREMENT_TEXT}.", 
                 ephemeral=True
             )
             return
