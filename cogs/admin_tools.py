@@ -403,7 +403,7 @@ class ToggleAutoMapVotesButton(Button):
         label = "🗳️ Disable Auto Map Votes" if current_state else "🗳️ Enable Auto Map Votes"
         style = discord.ButtonStyle.danger if current_state else discord.ButtonStyle.success
         
-        super().__init__(label=label, style=style)
+        super().__init__(label=label, style=style, row=0)
         self.parent = parent
 
     async def callback(self, interaction: discord.Interaction):
@@ -430,7 +430,7 @@ class ToggleAutoRolesButton(Button):
         label = "🎭 Disable Auto Roles" if current_state else "🎭 Enable Auto Roles"
         style = discord.ButtonStyle.danger if current_state else discord.ButtonStyle.success
         
-        super().__init__(label=label, style=style)
+        super().__init__(label=label, style=style, row=0)
         self.parent = parent
 
     async def callback(self, interaction: discord.Interaction):
@@ -455,7 +455,7 @@ class ToggleRecruitmentButton(Button):
         label = "🎯 Disable Recruitment" if current_state else "🎯 Enable Recruitment"
         style = discord.ButtonStyle.danger if current_state else discord.ButtonStyle.success
         
-        super().__init__(label=label, style=style)
+        super().__init__(label=label, style=style, row=1)
         self.parent = parent
 
     async def callback(self, interaction: discord.Interaction):
@@ -476,7 +476,7 @@ class ToggleRecruitmentButton(Button):
 
 class EditAdminRolesButton(Button):
     def __init__(self, parent):
-        super().__init__(label="🛡️ Edit Admin Roles", style=discord.ButtonStyle.secondary)
+        super().__init__(label="🛡️ Edit Admin Roles", style=discord.ButtonStyle.secondary, row=1)
         self.parent = parent
 
     async def callback(self, interaction: discord.Interaction):
@@ -484,7 +484,7 @@ class EditAdminRolesButton(Button):
 
 class EditReminderTimesButton(Button):
     def __init__(self, parent):
-        super().__init__(label="⏰ Edit Reminder Times", style=discord.ButtonStyle.secondary)
+        super().__init__(label="⏰ Edit Reminder Times", style=discord.ButtonStyle.secondary, row=2)
         self.parent = parent
 
     async def callback(self, interaction: discord.Interaction):
@@ -700,7 +700,7 @@ class CancelDeleteButton(Button):
 
 class EditTimezoneButton(Button):
     def __init__(self, parent):
-        super().__init__(label='🌐 Set Timezone', style=discord.ButtonStyle.primary)
+        super().__init__(label='🌐 Set Timezone', style=discord.ButtonStyle.primary, row=2)
         self.parent = parent
 
     async def callback(self, interaction: discord.Interaction):
