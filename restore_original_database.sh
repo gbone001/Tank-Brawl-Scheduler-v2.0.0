@@ -465,13 +465,13 @@ class EventDatabase:
         if not result:
             # Create default settings
             default_settings = {
-                'admin_roles': json.dumps(["Moderator", "Admin", "Event Organizer"]),
+                'admin_roles': json.dumps(["Tank Ops", "Server Admin"]),
                 'event_channels': json.dumps([]),
                 'reminder_times': json.dumps([60, 30, 10]),
                 'default_event_duration': 120,
                 'auto_role_assignment': 1,
                 'recruitment_enabled': 1,
-                'settings_data': json.dumps({})
+                'settings_data': json.dumps({'timezone': "America/New_York"})
             }
             
             cursor.execute('''
@@ -485,6 +485,10 @@ class EventDatabase:
         
         conn.close()
         
+        settings_data = json.loads(result[7]) if result[7] else {}
+        if 'timezone' not in settings_data:
+            settings_data['timezone'] = "America/New_York"
+
         return {
             'admin_roles': json.loads(result[1]),
             'event_channels': json.loads(result[2]),
@@ -492,7 +496,8 @@ class EventDatabase:
             'default_event_duration': result[4],
             'auto_role_assignment': bool(result[5]),
             'recruitment_enabled': bool(result[6]),
-            'settings_data': json.loads(result[7]) if result[7] else {}
+            'settings_data': settings_data,
+            'timezone': settings_data['timezone']
         }
 
     def update_guild_setting(self, guild_id: int, setting_name: str, value: Any):

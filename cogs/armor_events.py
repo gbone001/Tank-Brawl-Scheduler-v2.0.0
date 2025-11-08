@@ -5,11 +5,11 @@ from discord import app_commands
 from discord.ui import View, Button, UserSelect, Select, Modal, TextInput
 import logging
 import datetime
-import pytz
 from typing import Optional, Dict, List
 
 from utils.database import EventDatabase
 from utils.config import *
+from utils.timezone_utils import get_timezone, parse_event_datetime
 from utils.permissions import (
     has_scheduler_privileges,
     PERMISSION_DENIED_MESSAGE,
@@ -40,8 +40,8 @@ class ArmorEvents(commands.Cog):
     @app_commands.command(name="schedule_event")
     @app_commands.describe(
         event_type="Type of armor event",
-        date="Date in YYYY-MM-DD format (e.g., 2025-06-15)",
-        time="Time in HH:MM format, 24-hour (e.g., 20:00) - EST timezone",
+        date="Event date (YYYY-MM-DD or natural language like 'next Saturday')",
+        time="Optional time (HH:MM or phrases like '8pm'); uses your configured timezone",
         map_vote_channel="Channel for map vote (optional - defaults to current channel)"
     )
     @app_commands.choices(event_type=[
@@ -57,27 +57,20 @@ class ArmorEvents(commands.Cog):
         if not self._has_privileges(interaction.user):
             await interaction.response.send_message(PERMISSION_DENIED_MESSAGE, ephemeral=True)
             return
+
+        guild_settings = self.db.get_guild_settings(interaction.guild.id)
+        timezone_name = guild_settings.get("timezone", DEFAULT_TIMEZONE)
         
-        # Parse datetime with EST timezone
         event_datetime = None
-        if date:
-            if not time:
-                time = "20:00"
-            try:
-                date_obj = datetime.datetime.strptime(date, "%Y-%m-%d").date()
-                time_obj = datetime.datetime.strptime(time, "%H:%M").time()
-                event_datetime = datetime.datetime.combine(date_obj, time_obj)
-                
-                # Convert to EST timezone
-                est = pytz.timezone("US/Eastern")
-                event_datetime = est.localize(event_datetime)
-                
-                # Check if in the past (compare with EST now)
-                if event_datetime < datetime.datetime.now(est):
-                    await interaction.response.send_message("❌ Cannot schedule in the past!", ephemeral=True)
-                    return
-            except ValueError:
-                await interaction.response.send_message("❌ Invalid date/time format.", ephemeral=True)
+        if date or time:
+            event_datetime, parse_error = parse_event_datetime(date, time, timezone_name)
+            if parse_error:
+                await interaction.response.send_message(f"❌ {parse_error}", ephemeral=True)
+                return
+
+            tz = get_timezone(timezone_name)
+            if event_datetime < datetime.datetime.now(tz):
+                await interaction.response.send_message("❌ Cannot schedule events in the past for your configured timezone.", ephemeral=True)
                 return
 
         # Get preset (no custom title, use default)
@@ -107,12 +100,18 @@ class ArmorEvents(commands.Cog):
         
         # Auto-create map vote (separate message) - Use selected channel or current channel
         vote_channel = map_vote_channel if map_vote_channel else interaction.channel
-        map_vote_success = await self.create_map_vote(vote_channel, event_datetime, event_id)
+        map_vote_success = await self.create_map_vote(
+            vote_channel,
+            event_datetime,
+            event_id,
+            timezone_name
+        )
         
         # Response
         response = f"✅ {event_type.value.replace('_', ' ').title()} created!"
         if event_datetime:
             response += f"\n📅 <t:{int(event_datetime.timestamp())}:F>"
+            response += f"\n🕒 Timezone: {timezone_name}"
         
         if map_vote_success:
             if map_vote_channel:
@@ -252,73 +251,65 @@ class ArmorEvents(commands.Cog):
             logger.error(f"❌ Error removing roles: {e}")
             return False
 
-    async def create_map_vote(self, channel, event_datetime, event_id):
+    async def create_map_vote(self, channel, event_datetime, event_id, timezone_name: str):
         """Create map vote that ends 1 hour before event starts"""
         try:
-            logger.info(f"🔍 DEBUG: Looking for MapVoting cog...")
+            logger.info(f"?? DEBUG: Looking for MapVoting cog...")
             map_voting_cog = self.bot.get_cog('MapVoting')
-            
+
             if not map_voting_cog:
-                logger.warning(f"❌ DEBUG: MapVoting cog not found!")
+                logger.warning(f"? DEBUG: MapVoting cog not found!")
                 logger.info(f"Available cogs: {list(self.bot.cogs.keys())}")
                 return False
-            
-            logger.info(f"✅ DEBUG: Found MapVoting cog")
-            
+
+            logger.info(f"? DEBUG: Found MapVoting cog")
+
+            tz = get_timezone(timezone_name)
+            now = datetime.datetime.now(tz)
+
             # Calculate vote duration with timezone awareness
             if event_datetime:
-                est = pytz.timezone("US/Eastern")
-                now = datetime.datetime.now(est)
-                
-                # Calculate when the vote should END (1 hour before event)
                 vote_end_time = event_datetime - datetime.timedelta(hours=1)
-                
-                # Calculate how long the vote should run (from now until vote_end_time)
                 vote_duration_seconds = (vote_end_time - now).total_seconds()
                 vote_duration_minutes = int(vote_duration_seconds / 60)
-                
-                logger.info(f"🔍 DEBUG: Event time: {event_datetime}")
-                logger.info(f"🔍 DEBUG: Current time: {now}")
-                logger.info(f"🔍 DEBUG: Vote should END at: {vote_end_time}")
-                logger.info(f"🔍 DEBUG: Calculated vote duration: {vote_duration_minutes} minutes")
-                
-                # Handle edge cases
+
+                logger.info(f"?? DEBUG: Event time: {event_datetime}")
+                logger.info(f"?? DEBUG: Current time: {now}")
+                logger.info(f"?? DEBUG: Vote should END at: {vote_end_time}")
+                logger.info(f"?? DEBUG: Calculated vote duration: {vote_duration_minutes} minutes")
+
                 if vote_duration_minutes <= 15:
-                    # Event is very soon (less than 1 hour 15 minutes away)
-                    duration_minutes = 30  # Give at least 30 minutes
-                    logger.info(f"🔍 DEBUG: Event too soon, using minimum 30 minute vote")
+                    duration_minutes = 30
+                    logger.info(f"?? DEBUG: Event too soon, using minimum 30 minute vote")
                 else:
-                    # Use the calculated duration (vote ends 1 hour before event)
-                    # No maximum cap - vote runs however long needed
                     duration_minutes = vote_duration_minutes
-                    logger.info(f"🔍 DEBUG: Using calculated duration to end 1 hour before event")
+                    logger.info(f"?? DEBUG: Using calculated duration to end 1 hour before event")
             else:
-                # No event time set, use default 7 days
                 duration_minutes = 10080  # 7 days
-                logger.info(f"🔍 DEBUG: No event time set, using default 7 day vote")
-            
-            logger.info(f"🔍 DEBUG: Final vote duration: {duration_minutes} minutes ({duration_minutes/1440:.1f} days)")
-            actual_end_time = datetime.datetime.now(est) + datetime.timedelta(minutes=duration_minutes)
-            logger.info(f"🔍 DEBUG: Vote will actually end at: {actual_end_time}")
-            
-            # Create the map vote
+                logger.info(f"?? DEBUG: No event time set, using default 7 day vote")
+
+            logger.info(f"?? DEBUG: Final vote duration: {duration_minutes} minutes ({duration_minutes/1440:.1f} days)")
+            actual_end_time = now + datetime.timedelta(minutes=duration_minutes)
+            logger.info(f"?? DEBUG: Vote will actually end at: {actual_end_time}")
+
             if hasattr(map_voting_cog, 'create_auto_mapvote'):
                 result = await map_voting_cog.create_auto_mapvote(event_id, channel, duration_minutes)
                 if result:
-                    logger.info(f"✅ DEBUG: Map vote created successfully for {duration_minutes} minutes")
+                    logger.info(f"? DEBUG: Map vote created successfully for {duration_minutes} minutes")
                     return True
                 else:
-                    logger.error(f"❌ DEBUG: Map vote creation returned None/False")
+                    logger.error(f"? DEBUG: Map vote creation returned None/False")
                     return False
             else:
-                logger.error(f"❌ DEBUG: create_auto_mapvote method not found")
+                logger.error(f"? DEBUG: create_auto_mapvote method not found")
                 available_methods = [method for method in dir(map_voting_cog) if not method.startswith('_')]
                 logger.info(f"Available methods: {available_methods}")
                 return False
-                
+
         except Exception as e:
-            logger.error(f"❌ DEBUG: Error creating map vote: {e}")
+            logger.error(f"? DEBUG: Error creating map vote: {e}")
             return False
+
 
     @app_commands.command(name="list_roles")
     async def list_roles(self, interaction: discord.Interaction):

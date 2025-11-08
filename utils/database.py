@@ -5,6 +5,8 @@ import json
 import logging
 from typing import Optional, Dict, List, Any, Tuple
 
+from utils.config import DEFAULT_TIMEZONE
+
 logger = logging.getLogger(__name__)
 
 class EventDatabase:
@@ -466,7 +468,7 @@ class EventDatabase:
                 'default_event_duration': 120,
                 'auto_role_assignment': 1,
                 'recruitment_enabled': 1,
-                'settings_data': json.dumps({})
+                'settings_data': json.dumps({'timezone': DEFAULT_TIMEZONE})
             }
             
             cursor.execute('''
@@ -480,6 +482,10 @@ class EventDatabase:
         
         conn.close()
         
+        settings_data = json.loads(result[7]) if result[7] else {}
+        if 'timezone' not in settings_data:
+            settings_data['timezone'] = DEFAULT_TIMEZONE
+
         return {
             'admin_roles': json.loads(result[1]),
             'event_channels': json.loads(result[2]),
@@ -487,7 +493,8 @@ class EventDatabase:
             'default_event_duration': result[4],
             'auto_role_assignment': bool(result[5]),
             'recruitment_enabled': bool(result[6]),
-            'settings_data': json.loads(result[7]) if result[7] else {}
+            'settings_data': settings_data,
+            'timezone': settings_data['timezone']
         }
 
     def update_guild_setting(self, guild_id: int, setting_name: str, value: Any):

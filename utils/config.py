@@ -4,6 +4,8 @@
 MAX_CREWS_PER_TEAM = 6
 DEFAULT_EVENT_DURATION_HOURS = 2
 REMINDER_TIMES = [60, 30, 10]  # Minutes before event
+DEFAULT_TIMEZONE = "America/New_York"
+DEFAULT_EVENT_TIME = "20:00"  # 8 PM local time by default
 
 # Role configuration
 ADMIN_ROLES = ["Tank Ops", "Server Admin"]
@@ -134,5 +136,6 @@ DEFAULT_GUILD_SETTINGS = {
     "auto_map_votes": True,  # Auto-create map votes for events
     "map_vote_buffer_minutes": 60,  # Minutes before event to end map vote
     "max_crews_per_team": MAX_CREWS_PER_TEAM,
-    "require_verification": True
+    "require_verification": True,
+    "timezone": DEFAULT_TIMEZONE,
 }

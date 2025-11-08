@@ -4,6 +4,7 @@ aiohttp>=3.8.0
 
 # Timezone handling
 pytz>=2023.3
+dateparser>=1.2.0
 
 # Environment variables
 python-dotenv>=1.0.0

@@ -12,6 +12,7 @@ from utils.permissions import (
     has_scheduler_privileges,
     PERMISSION_DENIED_MESSAGE,
 )
+from utils.timezone_utils import canonicalize_timezone, is_valid_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,8 @@ class AdminTools(commands.Cog):
             value=f"**Auto Map Votes:** {'✅' if settings.get('auto_map_votes', True) else '❌'}\n"
                   f"**Auto Role Assignment:** {'✅' if settings.get('auto_role_assignment', True) else '❌'}\n"
                   f"**Recruitment System:** {'✅' if settings.get('recruitment_enabled', True) else '❌'}\n"
-                  f"**Max Crews per Team:** {settings.get('max_crews_per_team', 6)}",
+                  f"**Max Crews per Team:** {settings.get('max_crews_per_team', 6)}\n"
+                  f"**Timezone:** {settings.get('timezone', DEFAULT_TIMEZONE)}",
             inline=False
         )
         
@@ -393,6 +395,7 @@ class BotSettingsView(View):
         self.add_item(ToggleRecruitmentButton(self))
         self.add_item(EditAdminRolesButton(self))
         self.add_item(EditReminderTimesButton(self))
+        self.add_item(EditTimezoneButton(self))
 
 class ToggleAutoMapVotesButton(Button):
     def __init__(self, parent):
@@ -694,6 +697,59 @@ class CancelDeleteButton(Button):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+class EditTimezoneButton(Button):
+    def __init__(self, parent):
+        super().__init__(label='🌐 Set Timezone', style=discord.ButtonStyle.primary)
+        self.parent = parent
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(EditTimezoneModal(self.parent))
+
+
+class EditTimezoneModal(Modal):
+    def __init__(self, settings_view):
+        super().__init__(title='Set Event Timezone')
+        self.settings_view = settings_view
+
+        current_tz = self.settings_view.settings.get('timezone', DEFAULT_TIMEZONE)
+        self.timezone_input = TextInput(
+            label='IANA Timezone (e.g., America/New_York)',
+            placeholder='Use a timezone from https://momentjs.com/timezone/',
+            default=current_tz,
+            max_length=100
+        )
+        self.add_item(self.timezone_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        tz_value = self.timezone_input.value.strip()
+        if not tz_value:
+            await interaction.response.send_message(
+                '❌ Please provide a timezone such as "Europe/Berlin".',
+                ephemeral=True
+            )
+            return
+
+        canonical = canonicalize_timezone(tz_value)
+        if not canonical or not is_valid_timezone(canonical):
+            await interaction.response.send_message(
+                '❌ Timezone not recognized. Please use a valid IANA zone (see https://momentjs.com/timezone/).',
+                ephemeral=True
+            )
+            return
+
+        settings_data = self.settings_view.settings.get('settings_data', {}).copy()
+        settings_data['timezone'] = canonical
+
+        self.settings_view.db.update_guild_setting(interaction.guild.id, 'settings_data', settings_data)
+        self.settings_view.settings['settings_data'] = settings_data
+        self.settings_view.settings['timezone'] = canonical
+
+        await interaction.response.send_message(
+            f'✅ Timezone updated to **{canonical}**.',
+            ephemeral=True
+        )
+
 
 async def setup(bot):
     await bot.add_cog(AdminTools(bot))
